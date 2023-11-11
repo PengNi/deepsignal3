@@ -64,7 +64,7 @@ pip install torch==1.11.0
 
 ## Trained models
 Currently, we have trained the following models:
-   * [hg002.r10.4.10x.CG.epoch8.ckpt](https://github.com/PengNi/deepsignal2/blob/r10.4/model/model.r10.CG/hg002.rmet0.95_0.05.r10.4.10x.CG.epoch8.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome.
+   * [hg002.r10.4.CG.epoch8.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/hg002.r10.4.CG.epoch8.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome.
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
