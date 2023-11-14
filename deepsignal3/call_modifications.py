@@ -87,7 +87,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
     base_means.append([float(x) for x in words[7].split(",")])
     base_stds.append([float(x) for x in words[8].split(",")])
     base_signal_lens.append([int(x) for x in words[9].split(",")])
-    base_probs.append(np.zeros(13))#[float(x) for x in words[10].split(",")])
+    base_probs.append(np.zeros(len(base_signal_lens)))#[float(x) for x in words[10].split(",")])
     k_signals.append([[float(y) for y in x.split(",")] for x in words[11].split(";")])
     labels.append(int(words[12]))
 
@@ -117,7 +117,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
         base_means.append([float(x) for x in words[7].split(",")])
         base_stds.append([float(x) for x in words[8].split(",")])
         base_signal_lens.append([int(x) for x in words[9].split(",")])
-        base_probs.append(np.zeros(13))#[float(x) for x in words[10].split(",")])
+        base_probs.append(np.zeros(len(base_signal_lens)))#[float(x) for x in words[10].split(",")])
         k_signals.append([[float(y) for y in x.split(",")] for x in words[11].split(";")])
         labels.append(int(words[12]))
     infile.close()

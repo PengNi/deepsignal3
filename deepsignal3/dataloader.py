@@ -20,7 +20,7 @@ def parse_a_line2(line):
     base_means = np.array([float(x) for x in words[7].split(",")])
     base_stds = np.array([float(x) for x in words[8].split(",")])
     base_signal_lens = np.array([int(x) for x in words[9].split(",")])
-    base_probs = np.zeros(13)
+    base_probs = np.zeros(base_signal_lens.shape[0])
     #base_probs = np.array([float(x) for x in words[10].split(",")])
 
     k_signals = np.array([[float(y) for y in x.split(",")] for x in words[11].split(";")])
