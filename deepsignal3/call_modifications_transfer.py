@@ -29,7 +29,7 @@ except RuntimeError:
 from torch.multiprocessing import Queue
 import time
 
-from .models import ModelBiLSTM,ModelCNN
+from .models import ModelExtraction,Classifier1
 from .utils.process_utils import base2code_dna
 from .utils.process_utils import code2base_dna
 from .utils.process_utils import str2bool
@@ -51,11 +51,9 @@ from .extract_features import _reads_processed_stats
 
 from .utils.process_utils import get_logger
 
-from .extract_features_pod5 import _extract_preprocess as _extract_preprocess_pod5
-from .extract_features_pod5 import start_extract_processes as start_extract_processes_pod5
-from .utils import bam_reader
-import pod5
-import pysam
+from .extract_features_pod5 import _extract_preprocess
+from .extract_features_pod5 import start_extract_processes
+
 
 LOGGER = get_logger(__name__)
 
@@ -138,7 +136,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
                 "read {} reads in {} f5-batches({})".format(os.getpid(), r_num, b_num, f5_batch_size))
 
 
-def _call_mods(features_batch, model, batch_size, device=0):
+def _call_mods(features_batch, model,classifier, batch_size, device=0):
     # features_batch: 1. if from _read_features_file(), has 1 * args.batch_size samples (not any more, modified)
     # --------------: 2. if from _read_features_from_fast5s(), has uncertain number of samples
     sampleinfo, kmers, base_means, base_stds, base_signal_lens,  \
@@ -159,9 +157,10 @@ def _call_mods(features_batch, model, batch_size, device=0):
         b_k_signals = k_signals[batch_s:batch_e]
         b_labels = labels[batch_s:batch_e]
         if len(b_sampleinfo) > 0:
-            voutputs, vlogits = model(FloatTensor(b_kmers, device), FloatTensor(b_base_means, device),
+            vcombine_outputs = model(FloatTensor(b_kmers, device), FloatTensor(b_base_means, device),
                                       FloatTensor(b_base_stds, device), FloatTensor(b_base_signal_lens, device),
                                       FloatTensor(b_k_signals, device))
+            voutputs, vlogits=classifier(vcombine_outputs)
             _, vpredicted = torch.max(vlogits.data, 1)
             if use_cuda:
                 vlogits = vlogits.cpu()
@@ -194,27 +193,38 @@ def _call_mods(features_batch, model, batch_size, device=0):
     return pred_str, accuracy, batch_num
 
 
-def _call_mods_q(model_path, features_batch_q, pred_str_q, success_file, args, device=0):
+def _call_mods_q(model_path,classifier_path, features_batch_q, pred_str_q, success_file, args, device=0):
     LOGGER.info('call_mods process-{} starts'.format(os.getpid()))
-    model = ModelBiLSTM(args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
+    model = ModelExtraction(args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
                         args.dropout_rate, args.hid_rnn,
                         args.n_vocab, args.n_embed, str2bool(args.is_base), str2bool(args.is_signallen),
                         str2bool(args.is_trace),
                         args.model_type, device=device)
+    classifier = Classifier1()
 
     try:
         para_dict = torch.load(model_path, map_location=torch.device('cpu'))
     except Exception:
         para_dict = torch.jit.load(model_path)
+    try:
+        para_classifier_dict = torch.load(classifier_path, map_location=torch.device('cpu'))
+    except Exception:
+        para_classifier_dict = torch.jit.load(classifier_path)
     # para_dict = torch.load(model_path, map_location=torch.device(device))
     model_dict = model.state_dict()
     model_dict.update(para_dict)
     model.load_state_dict(model_dict)
+    classifier_dict = classifier.state_dict()
+    classifier_dict.update(para_classifier_dict)
+    classifier.load_state_dict(classifier_dict)
     del model_dict
+    del classifier_dict
 
     if use_cuda:
         model = model.cuda(device)
+        classifier = classifier.cuda(device)
     model.eval()
+    classifier.eval()
 
     accuracy_list = []
     batch_num_total = 0
@@ -233,7 +243,7 @@ def _call_mods_q(model_path, features_batch_q, pred_str_q, success_file, args, d
             # open(success_file, 'w').close()
             break
 
-        pred_str, accuracy, batch_num = _call_mods(features_batch, model, args.batch_size, device)
+        pred_str, accuracy, batch_num = _call_mods(features_batch, model,classifier, args.batch_size, device)
 
         pred_str_q.put(pred_str)
         while pred_str_q.qsize() > queue_size_border:
@@ -414,82 +424,6 @@ def _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_f
 
     _reads_processed_stats(error2num, len_fast5s, args.single)
 
-def _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, data_q, len_fast5s, positions, chrom2seqs,
-                               model_path, success_file, read_strand,pod5_dr,bam_index,
-                               args):
-    features_batch_q = Queue()
-    error_q = Queue()
-    pred_str_q = Queue()
-
-    if args.mapping:
-        aligner = get_aligner(ref_path, args.best_n)
-
-    nproc = args.nproc
-    nproc_gpu = args.nproc_gpu
-    if nproc_gpu < 1:
-        nproc_gpu = 1
-    if nproc <= nproc_gpu + 1:
-        LOGGER.info("--nproc must be >= --nproc_gpu + 2!!")
-        nproc = nproc_gpu + 1 + 1
-
-    data_q.put("kill")
-    nproc_extr = nproc - nproc_gpu - 1
-
-    extract_ps, map_conns = start_extract_processes_pod5(data_q, features_batch_q, error_q, nproc_extr,
-                                                    pod5_dr,bam_index,
-                                                    args.normalize_method,
-                                                    args.mapq, args.identity, args.coverage_ratio,
-                                                    motif_seqs, chrom2len, positions, read_strand,
-                                                    args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r, args.f5_batch_size,
-                                                    args.mapping,args.unmapped, chrom2seqs,
-                                                    True,False)
-    call_mods_gpu_procs = []
-    gpulist = _get_gpus()
-    gpuindex = 0
-    for i in range(nproc_gpu):
-        p_call_mods_gpu = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
-                                                                success_file, args, gpulist[gpuindex]),
-                                     name="caller_{:03d}".format(i))
-        gpuindex += 1
-        p_call_mods_gpu.daemon = True
-        p_call_mods_gpu.start()
-        call_mods_gpu_procs.append(p_call_mods_gpu)
-
-    # print("write_process started..")
-    p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q),
-                     name="writer")
-    p_w.daemon = True
-    p_w.start()
-
-    if args.mapping:
-        map_read_ts = start_map_threads(map_conns, aligner)
-
-    # finish processes
-    error2num = {-1: 0, -2: 0, -3: 0, 0: 0}  # (-1, -2, -3, 0)
-    while True:
-        running = any(p.is_alive() for p in extract_ps)
-        while not error_q.empty():
-            error2numtmp = error_q.get()
-            for ecode in error2numtmp.keys():
-                error2num[ecode] += error2numtmp[ecode]
-        if not running:
-            break
-
-    for p in extract_ps:
-        p.join()
-    if args.mapping:
-        for map_t in map_read_ts:
-            map_t.join()
-    features_batch_q.put("kill")
-
-    for p_call_mods_gpu in call_mods_gpu_procs:
-        p_call_mods_gpu.join()
-    pred_str_q.put("kill")
-
-    p_w.join()
-
-    _reads_processed_stats(error2num, len_fast5s, args.single)
 
 def _get_gpus():
     num_gpus = torch.cuda.device_count()
@@ -504,6 +438,7 @@ def call_mods(args):
     start = time.time()
     LOGGER.info("[call_mods] starts")
     model_path = os.path.abspath(args.model_path)
+    classifier_path=os.path.abspath(args.classifier_path)
     if not os.path.exists(model_path):
         raise ValueError("--model_path is not set right!")
     input_path = os.path.abspath(args.input_path)
@@ -521,31 +456,19 @@ def call_mods(args):
             raise ValueError("--reference_path is not set right!")
 
         is_recursive = str2bool(args.recursively)
-        if args.pod5==True:
-            bam_index=bam_reader.ReadIndexedBam(args.bam)
-            pod5_dr=pod5.DatasetReader(input_path, recursive=is_recursive)
         is_dna = False if args.rna else True
-        if args.pod5==True:
-            motif_seqs, chrom2len, fast5s_q, len_fast5s, \
-                positions, contigs = _extract_preprocess_pod5(args.motifs, is_dna, ref_path,
-                                                     args.f5_batch_size, args.positions,
-                                                     args,bam_index,pod5_dr)
-        else:
-            motif_seqs, chrom2len, fast5s_q, len_fast5s, \
-                positions, contigs = _extract_preprocess(input_path, is_recursive,
+        motif_seqs, chrom2len, fast5s_q, len_fast5s, \
+            positions, contigs = _extract_preprocess(input_path, is_recursive,
                                                      args.motifs, is_dna, ref_path,
                                                      args.f5_batch_size, args.positions,
                                                      args)
         read_strand = _get_read_sequened_strand(args.basecall_subgroup)
-        if args.pod5==True:
-            _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
-                                       model_path, success_file, read_strand,pod5_dr, bam_index,args)
-        else:
-            if use_cuda:
-                _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
+
+        if use_cuda:
+            _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
                                        model_path, success_file, read_strand, args)
-            else:
-                _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
+        else:
+            _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
                                         model_path, success_file, read_strand, args)
     else:
         features_batch_q = Queue()
@@ -575,7 +498,7 @@ def call_mods(args):
         gpulist = _get_gpus()
         gpuindex = 0
         for i in range(nproc_dp):
-            p = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
+            p = mp.Process(target=_call_mods_q, args=(model_path,classifier_path, features_batch_q, pred_str_q,
                                                       success_file, args, gpulist[gpuindex]),
                            name="caller_{:03d}".format(i))
             gpuindex += 1
@@ -616,14 +539,12 @@ def main():
     p_input.add_argument("--f5_batch_size", action="store", type=int, default=50,
                          required=False,
                          help="number of files to be processed by each process one time, default 50")
-    p_input.add_argument("--pod5", action="store_true", default=False, required=False,
-                       help='use pod5, default false')
-    p_input.add_argument('--bam', type=str, 
-                        help='the bam filepath')
 
     p_call = parser.add_argument_group("CALL")
     p_call.add_argument("--model_path", "-m", action="store", type=str, required=True,
-                        help="file path of the trained model (.ckpt)")
+                        help="file path of the trained extraction model (.ckpt)")
+    p_call.add_argument("--classifier_path", "-f", action="store", type=str, required=True,
+                        help="file path of the trained classifier model (.ckpt)")
 
     # model input
     p_call.add_argument('--model_type', type=str, default="both_bilstm",

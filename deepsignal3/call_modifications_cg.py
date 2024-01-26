@@ -29,7 +29,7 @@ except RuntimeError:
 from torch.multiprocessing import Queue
 import time
 
-from .models import ModelBiLSTM,ModelCNN
+from .models import ModelCG
 from .utils.process_utils import base2code_dna
 from .utils.process_utils import code2base_dna
 from .utils.process_utils import str2bool
@@ -84,6 +84,8 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
     #base_probs = []
     k_signals = []
     labels = []
+    tags=[]
+    cg_contents=[]
 
     line = next(infile)
     words = line.strip().split("\t")
@@ -97,6 +99,8 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
     #base_probs.append(np.zeros(len(words[9].split(","))))#[float(x) for x in words[10].split(",")])
     k_signals.append([[float(y) for y in x.split(",")] for x in words[10].split(";")])
     labels.append(int(words[11]))
+    tags.append([int(words[12])]*len(words[9].split(",")))
+    cg_contents.append([float(words[13])]*len(words[9].split(",")))
 
     for line in infile:
         words = line.strip().split("\t")
@@ -106,7 +110,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
             readid_pre = readidtmp
             if r_num % f5_batch_size == 0:
                 features_batch_q.put((sampleinfo, kmers, base_means, base_stds,
-                                      base_signal_lens, k_signals, labels))
+                                      base_signal_lens, k_signals, labels,tags,cg_contents))
                 while features_batch_q.qsize() > queue_size_border_f5batch:
                     time.sleep(time_wait)
                 sampleinfo = []
@@ -117,6 +121,8 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
                 #base_probs = []
                 k_signals = []
                 labels = []
+                tags=[]
+                cg_contents=[]
                 b_num += 1
 
         sampleinfo.append("\t".join(words[0:6]))
@@ -127,11 +133,13 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
         #base_probs.append(np.zeros(len(words[9].split(","))))#[float(x) for x in words[10].split(",")])
         k_signals.append([[float(y) for y in x.split(",")] for x in words[10].split(";")])
         labels.append(int(words[11]))
+        tags.append([int(words[12])]*len(words[9].split(",")))
+        cg_contents.append([float(words[13])]*len(words[9].split(",")))
     infile.close()
     r_num += 1
     if len(sampleinfo) > 0:
         features_batch_q.put((sampleinfo, kmers, base_means, base_stds,
-                              base_signal_lens, k_signals, labels))
+                              base_signal_lens, k_signals, labels,tags,cg_contents))
         b_num += 1
     features_batch_q.put("kill")
     LOGGER.info("read_features process-{} ending, "
@@ -142,7 +150,7 @@ def _call_mods(features_batch, model, batch_size, device=0):
     # features_batch: 1. if from _read_features_file(), has 1 * args.batch_size samples (not any more, modified)
     # --------------: 2. if from _read_features_from_fast5s(), has uncertain number of samples
     sampleinfo, kmers, base_means, base_stds, base_signal_lens,  \
-        k_signals, labels = features_batch
+        k_signals, labels,tags,cg_contents = features_batch
     labels = np.reshape(labels, (len(labels)))
 
     pred_str = []
@@ -158,10 +166,13 @@ def _call_mods(features_batch, model, batch_size, device=0):
         #b_base_probs = base_probs[batch_s:batch_e]
         b_k_signals = k_signals[batch_s:batch_e]
         b_labels = labels[batch_s:batch_e]
+        b_tags=tags[batch_s:batch_e]
+        b_cg_contents=cg_contents[batch_s:batch_e]
         if len(b_sampleinfo) > 0:
             voutputs, vlogits = model(FloatTensor(b_kmers, device), FloatTensor(b_base_means, device),
                                       FloatTensor(b_base_stds, device), FloatTensor(b_base_signal_lens, device),
-                                      FloatTensor(b_k_signals, device))
+                                      FloatTensor(b_k_signals, device),FloatTensor(b_tags, device),
+                                      FloatTensor(b_cg_contents, device))
             _, vpredicted = torch.max(vlogits.data, 1)
             if use_cuda:
                 vlogits = vlogits.cpu()
@@ -196,7 +207,7 @@ def _call_mods(features_batch, model, batch_size, device=0):
 
 def _call_mods_q(model_path, features_batch_q, pred_str_q, success_file, args, device=0):
     LOGGER.info('call_mods process-{} starts'.format(os.getpid()))
-    model = ModelBiLSTM(args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
+    model = ModelCG(args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
                         args.dropout_rate, args.hid_rnn,
                         args.n_vocab, args.n_embed, str2bool(args.is_base), str2bool(args.is_signallen),
                         str2bool(args.is_trace),

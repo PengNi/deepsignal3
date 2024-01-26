@@ -11,16 +11,31 @@ from ._version import DEEPSIGNAL3_VERSION
 
 def main_extraction(args):
     from .extract_features import extract_features
+    from .extract_features_pod5 import extract_features as extract_features_pod5
 
     display_args(args)
-    extract_features(args)
+    if args.pod5:
+        extract_features_pod5(args)
+    else:
+        extract_features(args)
 
 
 def main_call_mods(args):
     from .call_modifications import call_mods
+    from .call_modifications_transfer import call_mods as call_mods_transfer
+    from .call_modifications_domain import call_mods as call_mods_domain
+    from .call_modifications_cg import call_mods as call_mods_cg
+    from .call_modifications_cg_combine import call_mods as call_mods_cg_combine
 
     display_args(args)
-    call_mods(args)
+    if args.transfer:
+        print('transfer')
+        call_mods_transfer(args)
+    elif args.domain:
+        print('domain')
+        call_mods_domain(args)
+    else:    
+        call_mods_cg_combine(args)
 
 
 def main_call_freq(args):
@@ -30,10 +45,17 @@ def main_call_freq(args):
 
 
 def main_train(args):
-    from .train import train
+    from .train import train,train_transfer,train_domain,train_fusion,train_cnn,train_cg,train_combine
 
     display_args(args)
-    train(args)
+    if args.transfer:
+        print('transfer')
+        train_transfer(args)
+    elif args.domain:
+        print('domain')
+        train_domain(args)
+    else:
+        train(args)
 
 
 # def main_denoise(args):
@@ -86,22 +108,23 @@ def main():
 
     # sub_extract ============================================================================
     se_input = sub_extract.add_argument_group("INPUT")
-    se_input.add_argument("--fast5_dir", "-i", action="store", type=str,
+    se_input.add_argument("--input_dir", "-i", action="store", type=str,
                           required=True,
                           help="the directory of fast5 files")
     se_input.add_argument("--recursively", "-r", action="store", type=str, required=False,
                           default='yes',
-                          help='is to find fast5 files from fast5_dir recursively. '
+                          help='is to find fast5 files from input_dir recursively. '
                                'default true, t, yes, 1')
     se_input.add_argument("--single", action="store_true", default=False, required=False,
                           help='the fast5 files are in single-read format')
     se_input.add_argument("--reference_path", action="store",
-                          type=str, required=True,
+                          type=str, required=False,default=None,
                           help="the reference file to be used, usually is a .fa file")
     se_input.add_argument("--rna", action="store_true", default=False, required=False,
                           help='the fast5 files are from RNA samples. if is rna, the signals are reversed. '
                                'NOTE: Currently no use, waiting for further extentsion')
-
+    se_input.add_argument('--bam', type=str, 
+                        help='the bam filepath')
     se_extraction = sub_extract.add_argument_group("EXTRACTION")
     se_extraction.add_argument("--basecall_group", action="store", type=str, required=False,
                                default=None,
@@ -162,6 +185,8 @@ def main():
     se_mapping = sub_extract.add_argument_group("MAPPING")
     se_mapping.add_argument("--mapping", action="store_true", default=False, required=False,
                             help='use MAPPING to get alignment, default false')
+    se_mapping.add_argument("--unmapped", action="store_true", default=True, required=False,
+                            help='extract or mapping to get alignment, default True, means via mapping')
     se_mapping.add_argument("--mapq", type=int, default=10, required=False,
                             help="MAPping Quality cutoff for selecting alignment items, default 10")
     se_mapping.add_argument("--identity", type=float, default=0.75, required=False,
@@ -202,6 +227,8 @@ def main():
     sc_call = sub_call_mods.add_argument_group("CALL")
     sc_call.add_argument("--model_path", "-m", action="store", type=str, required=True,
                          help="file path of the trained model (.ckpt)")
+    sc_call.add_argument("--classifier_path", "-f", action="store", type=str,
+                        help="file path of the trained classifier model (.ckpt)")
 
     # model input
     sc_call.add_argument('--model_type', type=str, default="both_bilstm",
@@ -292,6 +319,8 @@ def main():
     
     sc_f5.add_argument("--trace", action="store_true", default=False, required=False,
                        help='use trace, default false')
+    sc_f5.add_argument("--gc_content", action="store_true", default=False, required=False,
+                          help='extract gc content feature')
 
     sc_mape = sub_call_mods.add_argument_group("MAPe")
     sc_mape.add_argument("--corrected_group", action="store", type=str, required=False,
@@ -322,7 +351,7 @@ def main():
                                required=False, help="number of processes to use gpu (if gpu is available), "
                                                     "1 or a number less than nproc-1, no more than "
                                                     "nproc/4 is suggested. default 2.")
-
+    
     sub_call_mods.set_defaults(func=main_call_mods)
 
     # sub_train =====================================================================================
@@ -369,8 +398,8 @@ def main():
                           required=False, help="type of optimizer to use, 'Adam' or 'SGD' or 'RMSprop', default Adam")
     st_train.add_argument('--batch_size', type=int, default=512, required=False)
     st_train.add_argument('--lr', type=float, default=0.001, required=False)
-    st_train.add_argument("--max_epoch_num", action="store", default=10, type=int,
-                          required=False, help="max epoch num, default 10")
+    st_train.add_argument("--max_epoch_num", action="store", default=15, type=int,
+                          required=False, help="max epoch num, default 15")
     st_train.add_argument("--min_epoch_num", action="store", default=5, type=int,
                           required=False, help="min epoch num, default 5")
     st_train.add_argument('--step_interval', type=int, default=100, required=False)
@@ -380,6 +409,8 @@ def main():
     #                        help='random seed')
     # else
     st_train.add_argument('--tmpdir', type=str, default="/tmp", required=False)
+    st_train.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
+    st_train.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
 
     sub_train.set_defaults(func=main_train)
 
@@ -467,6 +498,10 @@ def main():
                               'means use all calls. range [0, 1], default 0.5.')
 
     sub_call_freq.set_defaults(func=main_call_freq)
+    parser.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
+    parser.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
+    parser.add_argument('--pod5', action='store_true', default=False, help="weather use domain attribute")
+
 
     args = parser.parse_args()
     if hasattr(args, 'func'):
