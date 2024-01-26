@@ -85,6 +85,13 @@ deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.
 ```
 
 To call modifications, the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). 
+```bash
+dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cuda:0 --emit-moves  pod5/ --reference reference.fa  > example.bam
+
+CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --pod5 --input_path pod5/ --bam example.bam --model_path *.ckpt --result_file pod5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
+
+deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
+```
 
 ## Usage
 #### 1. Basecall
