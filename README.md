@@ -64,7 +64,7 @@ pip install torch==1.11.0
 
 ## Trained models
 Currently, we have trained the following models:
-   * [hg002.r10.4.CG.epoch8.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/hg002.r10.4.CG.epoch8.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome.
+   * [hg002.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/hg002.r10.4.CG.epoch7.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome.
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
@@ -84,10 +84,11 @@ CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy/ --model_
 deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
+To call modifications, the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). 
 
 ## Usage
 #### 1. Basecall
-Before run deepsignal, the raw reads should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)).
+If raw file is fast5, before run deepsignal, the raw reads should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)).
 
 For the example data:
 ```bash
@@ -97,7 +98,15 @@ guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_
 guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --fast5_out
 ```
 
+If raw file is pod5, before run deepsignal, the raw reads should be basecalled ([dorado](https://github.com/nanoporetech/dorado)).
 
+For the example data:
+```bash
+# 1. basecall using GPU
+dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cuda:0 --emit-moves  pod5/ --reference reference.fa  > example.bam
+# or using CPU
+dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cpu --emit-moves  pod5/ --reference reference.fa  > example.bam
+```
 #### 2. call modifications
 
 To call modifications, either the extracted-feature file or **the raw fast5 files (recommended)** can be used as input.
@@ -107,10 +116,10 @@ For the example data:
 # call 5mCpGs for instance
 
 # extracted-feature file as input
-deepsignal3 call_mods --input_path fast5s.CG.features.tsv --model_path hg002.r10.4.CG.epoch8.ckpt --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
+deepsignal3 call_mods --input_path fast5s.CG.features.tsv --model_path hg002.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
 
 # fast5 files as input, use GPU
-CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path hg002.r10.4.CG.epoch8.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
+CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path hg002.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
@@ -157,6 +166,8 @@ Features of targeted sites can be extracted for training or testing.
 For the example data (deepsignal3 extracts 13-mer-seq and 13*15-signal features of each CpG motif in reads by default.:
 ```bash
 deepsignal3 extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
+
+deepsignal3 --pod5 extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
 ```
 
 The extracted_features file is a tab-delimited text file in the following format:
