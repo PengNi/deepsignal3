@@ -3,17 +3,6 @@
 
 ## A deep-learning method for detecting methylation state from Oxford Nanopore reads.
 
-#### For the VBZ compression issue
-Please try adding ont-vbz-hdf-plugin to your environment as follows when all fast5s failed in `tombo resquiggle` and/or `deepsignal3 call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
-```shell
-# download ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz (or newer version) and set HDF5_PLUGIN_PATH
-# https://github.com/nanoporetech/vbz_compression/releases
-wget https://github.com/nanoporetech/vbz_compression/releases/download/v1.0.1/ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
-tar zxvf ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
-export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
-```
-
-
 ## Contents
 - [Installation](#Installation)
 - [Trained models](#Trained-models)
@@ -64,13 +53,14 @@ pip install torch==1.11.0
 
 ## Trained models
 Currently, we have trained the following models:
-   * [hg002.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/hg002.r10.4.CG.epoch7.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome.
+   * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model call 5mC in CG trained using HG002 R10.4 with reference genome chm13v2.
+   * [rice.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/rice.r10.4.CG.CHG.CHH.epoch7.ckpt): model call 5mC in CG/CHG/CHH trained using rice.
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
 
 ## Quick start
-To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)). Belows are commands to call 5mC in CG:
+To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG:
 ```bash
 # Higher versions of Guppy no longer support the output format fast5
 # Download and unzip the example data and pre-trained models.
@@ -82,15 +72,6 @@ guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_
 # CG
 CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
 deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
-```
-
-To call modifications, the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). 
-```bash
-dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cuda:0 --emit-moves  pod5/ --reference reference.fa  > example.bam
-
-CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --pod5 --input_path pod5/ --bam example.bam --model_path *.ckpt --result_file pod5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
-
-deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
 ```
 
 ## Usage
@@ -170,7 +151,7 @@ The modification_frequency file can be either saved in [bedMethyl](https://www.e
 #### 4. extract features
 Features of targeted sites can be extracted for training or testing.
 
-For the example data (deepsignal3 extracts 13-mer-seq and 13*15-signal features of each CpG motif in reads by default.:
+For the example data, deepsignal3 extracts 13-mer-seq and 13*15-signal features of each CpG motif in reads by default.:
 ```bash
 deepsignal3 extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
 
@@ -199,3 +180,13 @@ A new model can be trained as follows:
 deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/file --model_dir /dir/to/save/the/new/model
 ```
 
+## Appendix
+#### For the VBZ compression issue
+Please try adding ont-vbz-hdf-plugin to your environment as follows when all fast5s failed in `tombo resquiggle` and/or `deepsignal3 call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
+```shell
+# download ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz (or newer version) and set HDF5_PLUGIN_PATH
+# https://github.com/nanoporetech/vbz_compression/releases
+wget https://github.com/nanoporetech/vbz_compression/releases/download/v1.0.1/ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
+tar zxvf ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
+export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
+```
