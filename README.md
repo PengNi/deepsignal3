@@ -54,7 +54,7 @@ pip install torch==1.11.0
 ## Trained models
 Currently, we have trained the following models:
    * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model call 5mC in CG trained using human R10.4.1(4kHz) data with reference genome chm13v2.
-   * [rice.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/rice.r10.4.CG.CHG.CHH.epoch7.ckpt): model call 5mC in CG/CHG/CHH trained using rice R10.4.1(4kHz) data.
+   * [plant.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/rice.r10.4.CG.CHG.CHH.epoch7.ckpt): model call 5mC in CG/CHG/CHH trained using rice R10.4.1(4kHz) data.
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
