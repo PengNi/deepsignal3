@@ -1158,11 +1158,11 @@ def main():
                                help="the label of the interested modified bases, this is for training."
                                     " 0 or 1, default 1")
     ep_extraction.add_argument("--seq_len", action="store",
-                               type=int, required=False, default=13,
-                               help="len of kmer. default 13")
+                               type=int, required=False, default=21,
+                               help="len of kmer. default 21")
     ep_extraction.add_argument("--signal_len", action="store",
-                               type=int, required=False, default=15,
-                               help="the number of signals of one base to be used in deepsignal_plant, default 15")
+                               type=int, required=False, default=16,
+                               help="the number of signals of one base to be used in deepsignal_plant, default 16")
     ep_extraction.add_argument("--motifs", action="store", type=str,
                                required=False, default='CG',
                                help='motif seq to be extracted, default: CG. '
