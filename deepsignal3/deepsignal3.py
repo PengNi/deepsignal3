@@ -22,20 +22,9 @@ def main_extraction(args):
 
 def main_call_mods(args):
     from .call_modifications import call_mods
-    from .call_modifications_transfer import call_mods as call_mods_transfer
-    from .call_modifications_domain import call_mods as call_mods_domain
-    from .call_modifications_cg import call_mods as call_mods_cg
-    from .call_modifications_cg_combine import call_mods as call_mods_cg_combine
 
     display_args(args)
-    if args.transfer:
-        print('transfer')
-        call_mods_transfer(args)
-    elif args.domain:
-        print('domain')
-        call_mods_domain(args)
-    else:    
-        call_mods_cg_combine(args)
+    call_mods(args)
 
 
 def main_call_freq(args):
@@ -45,17 +34,10 @@ def main_call_freq(args):
 
 
 def main_train(args):
-    from .train import train,train_transfer,train_domain,train_fusion,train_cnn,train_cg,train_combine
+    from .train import train
 
     display_args(args)
-    if args.transfer:
-        print('transfer')
-        train_transfer(args)
-    elif args.domain:
-        print('domain')
-        train_domain(args)
-    else:
-        train(args)
+    train(args)
 
 
 # def main_denoise(args):
@@ -141,11 +123,11 @@ def main():
                                help="the label of the interested modified bases, this is for training."
                                     " 0 or 1, default 1")
     se_extraction.add_argument("--seq_len", action="store",
-                               type=int, required=False, default=13,
-                               help="len of kmer. default 13")
+                               type=int, required=False, default=21,
+                               help="len of kmer. default 21")
     se_extraction.add_argument("--signal_len", action="store",
-                               type=int, required=False, default=15,
-                               help="the number of signals of one base to be used in deepsignal_plant, default 15")
+                               type=int, required=False, default=16,
+                               help="the number of signals of one base to be used in deepsignal_plant, default 16")
     se_extraction.add_argument("--motifs", action="store", type=str,
                                required=False, default='CG',
                                help='motif seq to be extracted, default: CG. '
@@ -236,10 +218,10 @@ def main():
                          required=False,
                          help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
                               "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm")
-    sc_call.add_argument('--seq_len', type=int, default=13, required=False,
-                         help="len of kmer. default 13")
-    sc_call.add_argument('--signal_len', type=int, default=15, required=False,
-                         help="signal num of one base, default 15")
+    sc_call.add_argument('--seq_len', type=int, default=21, required=False,
+                         help="len of kmer. default 21")
+    sc_call.add_argument('--signal_len', type=int, default=16, required=False,
+                         help="signal num of one base, default 16")
 
     # model param
     sc_call.add_argument('--layernum1', type=int, default=3,
@@ -369,10 +351,10 @@ def main():
                           required=False,
                           help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
                                "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm")
-    st_train.add_argument('--seq_len', type=int, default=13, required=False,
-                          help="len of kmer. default 13")
-    st_train.add_argument('--signal_len', type=int, default=15, required=False,
-                          help="the number of signals of one base to be used in deepsignal_plant, default 15")
+    st_train.add_argument('--seq_len', type=int, default=21, required=False,
+                          help="len of kmer. default 21")
+    st_train.add_argument('--signal_len', type=int, default=16, required=False,
+                          help="the number of signals of one base to be used in deepsignal_plant, default 16")
     # model param
     st_train.add_argument('--layernum1', type=int, default=3,
                           required=False, help="lstm layer num for combined feature, default 3")
@@ -409,8 +391,6 @@ def main():
     #                        help='random seed')
     # else
     st_train.add_argument('--tmpdir', type=str, default="/tmp", required=False)
-    st_train.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
-    st_train.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
 
     sub_train.set_defaults(func=main_train)
 
@@ -498,8 +478,7 @@ def main():
                               'means use all calls. range [0, 1], default 0.5.')
 
     sub_call_freq.set_defaults(func=main_call_freq)
-    parser.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
-    parser.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
+
     parser.add_argument('--pod5', action='store_true', default=False, help="weather use domain attribute")
 
 
