@@ -29,7 +29,7 @@ except RuntimeError:
 from torch.multiprocessing import Queue
 import time
 
-from .models import ModelBiLSTM,ModelCNN
+from .models import ModelBiLSTM
 from .utils.process_utils import base2code_dna
 from .utils.process_utils import code2base_dna
 from .utils.process_utils import str2bool
@@ -631,10 +631,10 @@ def main():
                         required=False,
                         help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
                              "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm")
-    p_call.add_argument('--seq_len', type=int, default=13, required=False,
-                        help="len of kmer. default 13")
-    p_call.add_argument('--signal_len', type=int, default=15, required=False,
-                        help="signal num of one base, default 15")
+    p_call.add_argument('--seq_len', type=int, default=21, required=False,
+                        help="len of kmer. default 21")
+    p_call.add_argument('--signal_len', type=int, default=16, required=False,
+                        help="signal num of one base, default 16")
 
     # model param
     p_call.add_argument('--layernum1', type=int, default=3,
