@@ -1,7 +1,7 @@
 # DeepSignal3
 
 
-## A deep-learning method for detecting methylation state from modern Oxford Nanopore reads.
+## A deep learning tool for detecting DNA methylation detection from modern Oxford Nanopore reads.
 
 ## Contents
 - [Installation](#Installation)
@@ -53,8 +53,8 @@ pip install torch==1.11.0
 
 ## Trained models
 Currently, we have trained the following models:
-   * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model call 5mC in CG trained using human R10.4.1(4kHz) data with reference genome chm13v2.
-   * [plant.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/rice.r10.4.CG.CHG.CHH.epoch7.ckpt): model call 5mC in CG/CHG/CHH trained using rice R10.4.1(4kHz) data.
+   * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 detect 5mC at CG .
+   * [plant.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/model.r10.CG/rice.r10.4.CG.CHG.CHH.epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data detect 5mC at CG/CHG/CHH .
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
@@ -104,10 +104,10 @@ For the example data:
 # call 5mCpGs for instance
 
 # extracted-feature file as input
-deepsignal3 call_mods --input_path fast5s.CG.features.tsv --model_path hg002.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
+deepsignal3 call_mods --input_path fast5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
 
 # fast5 files as input, use GPU
-CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path hg002.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
+CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
