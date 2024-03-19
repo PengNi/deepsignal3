@@ -1,7 +1,7 @@
 # DeepSignal3
 
 
-## A deep learning tool for detecting DNA methylation detection from modern Oxford Nanopore reads.
+## A deep learning tool for DNA methylation detection from modern Oxford Nanopore reads.
 
 ## Contents
 - [Installation](#Installation)
@@ -53,8 +53,8 @@ pip install torch==1.11.0
 
 ## Trained models
 Currently, we have trained the following models:
-   * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 detect 5mC at CG .
-   * [plant.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/plant.r10.4.CG.CHG.CHH.epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data detect 5mC at CG/CHG/CHH .
+   * [human.r10.4.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.CG.epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
+   * [plant.r10.4.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/plant.r10.4.CG.CHG.CHH.epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH.
 
 ## Example data
 Example data, including training data and test data, can be downloaded from ([google drive](https://drive.google.com/drive/folders/1GNkT0a8-jNdNJe1Wx2eI5hJY_Zv9bXqF)). Example data from the human genome HG002.
