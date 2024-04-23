@@ -35,6 +35,8 @@ from .utils.process_utils import code2base_dna
 from .utils.process_utils import str2bool
 from .utils.process_utils import display_args
 from .utils.process_utils import nproc_to_call_mods_in_cpu_mode
+from .utils.process_utils import get_refloc_of_methysite_in_motif
+from .utils.process_utils import get_motif_seqs
 
 from .extract_features import _extract_preprocess
 
@@ -48,11 +50,11 @@ from .extract_features import get_aligner
 from .extract_features import start_extract_processes
 from .extract_features import start_map_threads
 from .extract_features import _reads_processed_stats
+from .extract_features import _group_signals_by_movetable_v2
+from .extract_features import _get_signals_rect
 
 from .utils.process_utils import get_logger
 
-from .extract_features_pod5 import _extract_preprocess as _extract_preprocess_pod5
-from .extract_features_pod5 import start_extract_processes as start_extract_processes_pod5
 from .utils import bam_reader
 import pod5
 import pysam
@@ -67,7 +69,7 @@ queue_size_border_f5batch = 100
 time_wait = 3
 
 
-def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
+def _read_features_file(features_file, features_batch_q, r_batch_size=10):
     LOGGER.info("read_features process-{} starts".format(os.getpid()))
     r_num, b_num = 0, 0
 
@@ -104,7 +106,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
         if readidtmp != readid_pre:
             r_num += 1
             readid_pre = readidtmp
-            if r_num % f5_batch_size == 0:
+            if r_num % r_batch_size == 0:
                 features_batch_q.put((sampleinfo, kmers, base_means, base_stds,
                                       base_signal_lens, k_signals, labels))
                 while features_batch_q.qsize() > queue_size_border_f5batch:
@@ -135,7 +137,7 @@ def _read_features_file(features_file, features_batch_q, f5_batch_size=10):
         b_num += 1
     features_batch_q.put("kill")
     LOGGER.info("read_features process-{} ending, "
-                "read {} reads in {} f5-batches({})".format(os.getpid(), r_num, b_num, f5_batch_size))
+                "read {} reads in {} f5-batches({})".format(os.getpid(), r_num, b_num, r_batch_size))
 
 
 def _call_mods(features_batch, model, batch_size, device=0):
@@ -292,7 +294,7 @@ def _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fa
                                                     args.mapq, args.identity, args.coverage_ratio,
                                                     motif_seqs, chrom2len, positions, read_strand,
                                                     args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r,  args.single, args.f5_batch_size,
+                                                    args.pad_only_r,  args.single, args.r_batch_size,
                                                     args.mapping, args.corrected_group, chrom2seqs,
                                                     is_to_str=False, is_batchlize=True,is_trace=args.trace)
     call_mods_gpu_procs = []
@@ -366,7 +368,7 @@ def _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_f
                                                     args.mapq, args.identity, args.coverage_ratio,
                                                     motif_seqs, chrom2len, positions, read_strand,
                                                     args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r, args.single, args.f5_batch_size,
+                                                    args.pad_only_r, args.single, args.r_batch_size,
                                                     args.mapping, args.corrected_group, chrom2seqs,
                                                     is_to_str=False, is_batchlize=True,is_trace=args.trace)
 
@@ -414,15 +416,11 @@ def _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_f
 
     _reads_processed_stats(error2num, len_fast5s, args.single)
 
-def _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, data_q, len_fast5s, positions, chrom2seqs,
+def _call_mods_from_pod5_gpu(motif_seqs, chrom2len, data_q, len_fast5s, positions, chrom2seqs,
                                model_path, success_file, read_strand,pod5_dr,bam_index,
                                args):
     features_batch_q = Queue()
-    error_q = Queue()
     pred_str_q = Queue()
-
-    if args.mapping:
-        aligner = get_aligner(ref_path, args.best_n)
 
     nproc = args.nproc
     nproc_gpu = args.nproc_gpu
@@ -433,17 +431,7 @@ def _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, data_q, len_fast5s
         nproc = nproc_gpu + 1 + 1
 
     data_q.put("kill")
-    nproc_extr = nproc - nproc_gpu - 1
 
-    extract_ps, map_conns = start_extract_processes_pod5(data_q, features_batch_q, error_q, nproc_extr,
-                                                    pod5_dr,bam_index,
-                                                    args.normalize_method,
-                                                    args.mapq, args.identity, args.coverage_ratio,
-                                                    motif_seqs, chrom2len, positions, read_strand,
-                                                    args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r, args.f5_batch_size,
-                                                    args.mapping,args.unmapped, chrom2seqs,
-                                                    True,False)
     call_mods_gpu_procs = []
     gpulist = _get_gpus()
     gpuindex = 0
@@ -462,25 +450,7 @@ def _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, data_q, len_fast5s
     p_w.daemon = True
     p_w.start()
 
-    if args.mapping:
-        map_read_ts = start_map_threads(map_conns, aligner)
-
     # finish processes
-    error2num = {-1: 0, -2: 0, -3: 0, 0: 0}  # (-1, -2, -3, 0)
-    while True:
-        running = any(p.is_alive() for p in extract_ps)
-        while not error_q.empty():
-            error2numtmp = error_q.get()
-            for ecode in error2numtmp.keys():
-                error2num[ecode] += error2numtmp[ecode]
-        if not running:
-            break
-
-    for p in extract_ps:
-        p.join()
-    if args.mapping:
-        for map_t in map_read_ts:
-            map_t.join()
     features_batch_q.put("kill")
 
     for p_call_mods_gpu in call_mods_gpu_procs:
@@ -489,8 +459,6 @@ def _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, data_q, len_fast5s
 
     p_w.join()
 
-    _reads_processed_stats(error2num, len_fast5s, args.single)
-
 def _get_gpus():
     num_gpus = torch.cuda.device_count()
     if num_gpus > 0:
@@ -498,6 +466,103 @@ def _get_gpus():
     else:
         gpulist = [0]
     return gpulist * 1000
+
+def process_data(data,motif_seqs,kmer_len,signals_len,methyloc=0,methy_label=1):
+    if kmer_len % 2 == 0:
+        raise ValueError("kmer_len must be odd")
+    num_bases = (kmer_len - 1) // 2
+    features_list = []
+    signal,seq_read=data
+    read_dict=dict(seq_read.tags)
+    mv_table=np.asarray(read_dict['mv'][1:])
+    stride=int(read_dict['mv'][0])
+    num_trimmed=read_dict["ts"]
+    norm_shift = read_dict["sm"]
+    norm_scale = read_dict["sd"]
+    if num_trimmed >= 0:
+        signal_trimmed = (signal[num_trimmed:] - norm_shift) / norm_scale
+    else:
+        signal_trimmed = (signal[:num_trimmed] - norm_shift) / norm_scale
+    sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    if sscale == 0.0:
+        norm_signals = signal_trimmed
+    else:
+        norm_signals = (signal_trimmed - sshift) / sscale
+    seq=seq_read.get_forward_sequence()
+    signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
+    tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
+    strand="-" if seq_read.is_reverse else '+'
+    ref_start=seq_read.reference_start
+    sampleinfo = []  # contains: chromosome, pos, strand, pos_in_strand, read_name, read_strand
+    kmers = []
+    base_means = []
+    base_stds = []
+    base_signal_lens = []
+    #base_probs = []
+    k_signals_rect = []
+    labels = []
+    for loc_in_read in tsite_locs:
+        if num_bases <= loc_in_read < len(seq) - num_bases:
+            if strand == '-':
+                pos = ref_start + len(seq) - 1 - loc_in_read
+            else:
+                pos = ref_start + loc_in_read
+            k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
+            k_seq=[base2code_dna[x] for x in k_mer]
+            k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
+
+            signal_lens = [len(x) for x in k_signals]
+            # if sum(signal_lens) > MAX_LEGAL_SIGNAL_NUM:
+            #     continue
+
+            signal_means = [np.mean(x) for x in k_signals]
+            signal_stds = [np.std(x) for x in k_signals]
+            if seq_read.reference_name is None:
+                ref_name='.'
+            else:
+                ref_name=seq_read.reference_name
+            sampleinfo.append('\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand]))
+            kmers.append(k_seq)
+            base_means.append(signal_means)
+            base_stds.append(signal_stds)
+            base_signal_lens.append(signal_lens)
+            k_signals_rect.append(_get_signals_rect(k_signals, signals_len))
+            labels.append(methy_label)
+            
+    features_list=(sampleinfo,kmers, base_means, base_stds, base_signal_lens,
+                                    k_signals_rect,labels)
+    return features_list
+
+def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,kmer_len,signals_len,r_batch_size=10,qsize_limit=4,time_wait=1):
+    chunk=[]
+    for filename in sig_dr:
+        with pod5.Reader(filename) as reader:
+            for read_record in reader.reads():
+                if feature_Q.qsize()>qsize_limit:
+                    time.sleep(time_wait)
+                read_name=str(read_record.read_id)
+                signal=read_record.signal
+                if signal is None:
+                    continue
+                try:
+                    for seq_read in seq_index.get_alignments(read_name):
+                        seq = seq_read.get_forward_sequence()
+                        if seq is None:
+                            continue
+                        data=(signal,seq_read)
+                        feature_lists=process_data(data,motif_seqs,kmer_len,signals_len)
+                        #chunk.append(feature_lists)
+                        #if len(chunk)>=r_batch_size:
+                        #print(len(feature_lists[0]),flush=True)
+                        feature_Q.put(feature_lists)
+                        chunk=[]               
+                except KeyError:
+                    print('Read:%s not found in BAM file' %read_name, flush=True)
+                    continue
+    if len(chunk)>0:
+        feature_Q.put(chunk)
+        chunk=[]
+    feature_Q.put('kill')
 
 
 def call_mods(args):
@@ -511,36 +576,84 @@ def call_mods(args):
         raise ValueError("--input_path does not exist!")
     success_file = input_path.rstrip("/") + "." + str(uuid.uuid1()) + ".success"
     if os.path.exists(success_file):
-        os.remove(success_file)
-
+        os.remove(success_file) 
     if os.path.isdir(input_path):
-        if args.reference_path is None:
-            raise ValueError("--reference_path is required to be set!")
-        ref_path = os.path.abspath(args.reference_path)
-        if not os.path.exists(ref_path):
-            raise ValueError("--reference_path is not set right!")
-
+        ref_path = None
+        if args.reference_path is not None:
+            ref_path = os.path.abspath(args.reference_path)
+            if not os.path.exists(ref_path):
+                raise ValueError("--reference_path is not set right!")
+        is_dna = False if args.rna else True
         is_recursive = str2bool(args.recursively)
+        
         if args.pod5==True:
             bam_index=bam_reader.ReadIndexedBam(args.bam)
-            pod5_dr=pod5.DatasetReader(input_path, recursive=is_recursive)
-        is_dna = False if args.rna else True
-        if args.pod5==True:
-            motif_seqs, chrom2len, fast5s_q, len_fast5s, \
-                positions, contigs = _extract_preprocess_pod5(args.motifs, is_dna, ref_path,
-                                                     args.f5_batch_size, args.positions,
-                                                     args,bam_index,pod5_dr)
+            #pod5_dr=pod5.DatasetReader(input_path, recursive=is_recursive)
+            LOGGER.info("parse the motifs string")
+            motif_seqs = get_motif_seqs(args.motifs, is_dna)
+            features_batch_q = Queue()
+            #ctx_fork = mp.get_context('fork')
+            pod5_dr=[]
+            for pod5_name in os.listdir(input_path):
+                if pod5_name.endswith('.pod5'):
+                    pod5_path = '/'.join([input_path, pod5_name])
+                    pod5_dr.append(pod5_path)
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,pod5_dr, features_batch_q,motif_seqs,args.seq_len,args.signal_len,
+                                                            args.r_batch_size),
+                          name="reader")
+            p_rf.daemon = True
+            p_rf.start()
+            pred_str_q = Queue()
+
+            predstr_procs = []
+
+            if use_cuda:
+                nproc_dp = args.nproc_gpu
+                if nproc_dp < 1:
+                    nproc_dp = 1
+            else:
+                nproc = args.nproc
+                if nproc < 3:
+                    LOGGER.info("--nproc must be >= 3!!")
+                    nproc = 3
+                nproc_dp = nproc - 2
+                if nproc_dp > nproc_to_call_mods_in_cpu_mode:
+                    nproc_dp = nproc_to_call_mods_in_cpu_mode
+
+            gpulist = _get_gpus()
+            gpuindex = 0
+            for i in range(nproc_dp):
+                p = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
+                                                        success_file, args, gpulist[gpuindex]),
+                            name="caller_{:03d}".format(i))
+                gpuindex += 1
+                p.daemon = True
+                p.start()
+                predstr_procs.append(p)
+
+            # print("write_process started..")
+            #ctx_spawn = mp.get_context('spawn')
+            p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q),
+                            name="writer")
+            p_w.daemon = True
+            p_w.start()
+
+            for p in predstr_procs:
+                p.join()
+
+            # print("finishing the write_process..")
+            pred_str_q.put("kill")
+
+            p_rf.join()
+
+            p_w.join()
         else:
+            read_strand = _get_read_sequened_strand(args.basecall_subgroup)
             motif_seqs, chrom2len, fast5s_q, len_fast5s, \
                 positions, contigs = _extract_preprocess(input_path, is_recursive,
                                                      args.motifs, is_dna, ref_path,
-                                                     args.f5_batch_size, args.positions,
+                                                     args.r_batch_size, args.positions,
                                                      args)
-        read_strand = _get_read_sequened_strand(args.basecall_subgroup)
-        if args.pod5==True:
-            _call_mods_from_pod5_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
-                                       model_path, success_file, read_strand,pod5_dr, bam_index,args)
-        else:
             if use_cuda:
                 _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs,
                                        model_path, success_file, read_strand, args)
@@ -550,7 +663,7 @@ def call_mods(args):
     else:
         features_batch_q = Queue()
         p_rf = mp.Process(target=_read_features_file, args=(input_path, features_batch_q,
-                                                            args.f5_batch_size),
+                                                            args.r_batch_size),
                           name="reader")
         p_rf.daemon = True
         p_rf.start()
@@ -613,7 +726,7 @@ def main():
                          help="the input path, can be a signal_feature file from extract_features.py, "
                               "or a directory of fast5 files. If a directory of fast5 files is provided, "
                               "args in FAST5_EXTRACTION and MAPPING should (reference_path must) be provided.")
-    p_input.add_argument("--f5_batch_size", action="store", type=int, default=50,
+    p_input.add_argument("--r_batch_size", action="store", type=int, default=50,
                          required=False,
                          help="number of files to be processed by each process one time, default 50")
     p_input.add_argument("--pod5", action="store_true", default=False, required=False,
