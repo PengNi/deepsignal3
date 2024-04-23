@@ -945,7 +945,7 @@ def extract_features(args):
     motif_seqs, chrom2len, fast5s_q, len_fast5s, \
         positions, contigs = _extract_preprocess(fast5_dir, is_recursive,
                                                  args.motifs, is_dna, ref_path,
-                                                 args.f5_batch_size, args.positions,
+                                                 args.r_batch_size, args.positions,
                                                  args)
 
     # read_strand has been deprecated
@@ -969,7 +969,7 @@ def extract_features(args):
                                                     args.mapq, args.identity, args.coverage_ratio,
                                                     motif_seqs, chrom2len, positions, read_strand,
                                                     args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r, args.single, args.f5_batch_size,
+                                                    args.pad_only_r, args.single, args.r_batch_size,
                                                     args.mapping, args.corrected_group, contigs,True,False,args.trace)
 
     p_w = mp.Process(target=_write_featurestr, args=(args.write_path, features_q, args.w_batch_num,
@@ -1073,7 +1073,7 @@ def main():
                                     " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
                                     "need to be set. --positions is used to narrow down the range of the trageted "
                                     "motif locs. default None")
-    ep_extraction.add_argument("--f5_batch_size", action="store", type=int, default=50,
+    ep_extraction.add_argument("--r_batch_size", action="store", type=int, default=50,
                                required=False,
                                help="number of files to be processed by each process one time, default 50")
     ep_extraction.add_argument("--pad_only_r", action="store_true", default=False,
