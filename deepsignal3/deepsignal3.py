@@ -148,7 +148,7 @@ def main():
                                     " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
                                     "need to be set. --positions is used to narrow down the range of the trageted "
                                     "motif locs. default None")
-    se_extraction.add_argument("--f5_batch_size", action="store", type=int, default=50,
+    se_extraction.add_argument("--r_batch_size", action="store", type=int, default=50,
                                required=False,
                                help="number of files to be processed by each process one time, default 50")
     se_extraction.add_argument("--pad_only_r", action="store_true", default=False,
@@ -202,7 +202,7 @@ def main():
                           help="the input path, can be a signal_feature file from extract_features.py, "
                                "or a directory of fast5 files. If a directory of fast5 files is provided, "
                                "args in FAST5_EXTRACTION and MAPPING should (reference_path must) be provided.")
-    sc_input.add_argument("--f5_batch_size", action="store", type=int, default=50,
+    sc_input.add_argument("--r_batch_size", action="store", type=int, default=50,
                           required=False,
                           help="number of files to be processed by each process one time, default 50")
 
