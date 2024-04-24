@@ -416,47 +416,77 @@ def _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_f
 
     _reads_processed_stats(error2num, len_fast5s, args.single)
 
-def _call_mods_from_pod5_gpu(motif_seqs, chrom2len, data_q, len_fast5s, positions, chrom2seqs,
-                               model_path, success_file, read_strand,pod5_dr,bam_index,
-                               args):
+def split_list(data, num_chunks):
+    
+    avg_chunk_size = len(data) // num_chunks
+    chunks = [data[i:i+avg_chunk_size] for i in range(0, len(data), avg_chunk_size)]
+    return chunks
+
+def _call_mods_from_pod5_gpu(pod5_dr,bam_index,success_file,model_path,motif_seqs,args):
+    nproc = args.nproc   
+    if use_cuda:
+        nproc_dp = args.nproc_gpu
+        if nproc_dp < 1:
+            nproc_dp = 1
+    else:       
+        if nproc < 3:
+            LOGGER.info("--nproc must be >= 3!!")
+            nproc = 3
+            nproc_dp = nproc - 2
     features_batch_q = Queue()
+    nproc_ex=nproc - nproc_dp - 1
+    p_rfs=[]
+    if nproc_ex<len(pod5_dr):
+        data=split_list(pod5_dr, nproc_ex)
+        for sig_data in data:
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,args.seq_len,args.signal_len,
+                                                            args.r_batch_size),
+                          name="reader")
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+    else:
+        data=split_list(pod5_dr, len(pod5_dr))
+        for sig_data in data:
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,args.seq_len,args.signal_len,
+                                                            args.r_batch_size),
+                          name="reader")
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+    
     pred_str_q = Queue()
 
-    nproc = args.nproc
-    nproc_gpu = args.nproc_gpu
-    if nproc_gpu < 1:
-        nproc_gpu = 1
-    if nproc <= nproc_gpu + 1:
-        LOGGER.info("--nproc must be >= --nproc_gpu + 2!!")
-        nproc = nproc_gpu + 1 + 1
+    predstr_procs = []
 
-    data_q.put("kill")
+    
 
-    call_mods_gpu_procs = []
     gpulist = _get_gpus()
     gpuindex = 0
-    for i in range(nproc_gpu):
-        p_call_mods_gpu = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
-                                                                success_file, args, gpulist[gpuindex]),
-                                     name="caller_{:03d}".format(i))
+    
+    for i in range(nproc_dp):
+        p = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
+                                                success_file, args, gpulist[gpuindex]),
+                    name="caller_{:03d}".format(i))
         gpuindex += 1
-        p_call_mods_gpu.daemon = True
-        p_call_mods_gpu.start()
-        call_mods_gpu_procs.append(p_call_mods_gpu)
+        p.daemon = True
+        p.start()
+        predstr_procs.append(p)
 
     # print("write_process started..")
+    #ctx_spawn = mp.get_context('spawn')
     p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q),
-                     name="writer")
+                    name="writer")
     p_w.daemon = True
     p_w.start()
+    for pb in p_rfs:
+        pb.join()
+    features_batch_q.put('kill')
+    for p in predstr_procs:
+        p.join()
 
-    # finish processes
-    features_batch_q.put("kill")
-
-    for p_call_mods_gpu in call_mods_gpu_procs:
-        p_call_mods_gpu.join()
+    # print("finishing the write_process..")
     pred_str_q.put("kill")
-
     p_w.join()
 
 def _get_gpus():
@@ -562,7 +592,7 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,kmer_len,signals_len,r
     if len(chunk)>0:
         feature_Q.put(chunk)
         chunk=[]
-    feature_Q.put('kill')
+    
 
 
 def call_mods(args):
@@ -591,62 +621,15 @@ def call_mods(args):
             #pod5_dr=pod5.DatasetReader(input_path, recursive=is_recursive)
             LOGGER.info("parse the motifs string")
             motif_seqs = get_motif_seqs(args.motifs, is_dna)
-            features_batch_q = Queue()
+            
             #ctx_fork = mp.get_context('fork')
             pod5_dr=[]
             for pod5_name in os.listdir(input_path):
                 if pod5_name.endswith('.pod5'):
                     pod5_path = '/'.join([input_path, pod5_name])
                     pod5_dr.append(pod5_path)
-            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,pod5_dr, features_batch_q,motif_seqs,args.seq_len,args.signal_len,
-                                                            args.r_batch_size),
-                          name="reader")
-            p_rf.daemon = True
-            p_rf.start()
-            pred_str_q = Queue()
-
-            predstr_procs = []
-
-            if use_cuda:
-                nproc_dp = args.nproc_gpu
-                if nproc_dp < 1:
-                    nproc_dp = 1
-            else:
-                nproc = args.nproc
-                if nproc < 3:
-                    LOGGER.info("--nproc must be >= 3!!")
-                    nproc = 3
-                nproc_dp = nproc - 2
-                if nproc_dp > nproc_to_call_mods_in_cpu_mode:
-                    nproc_dp = nproc_to_call_mods_in_cpu_mode
-
-            gpulist = _get_gpus()
-            gpuindex = 0
-            for i in range(nproc_dp):
-                p = mp.Process(target=_call_mods_q, args=(model_path, features_batch_q, pred_str_q,
-                                                        success_file, args, gpulist[gpuindex]),
-                            name="caller_{:03d}".format(i))
-                gpuindex += 1
-                p.daemon = True
-                p.start()
-                predstr_procs.append(p)
-
-            # print("write_process started..")
-            #ctx_spawn = mp.get_context('spawn')
-            p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q),
-                            name="writer")
-            p_w.daemon = True
-            p_w.start()
-
-            for p in predstr_procs:
-                p.join()
-
-            # print("finishing the write_process..")
-            pred_str_q.put("kill")
-
-            p_rf.join()
-
-            p_w.join()
+            _call_mods_from_pod5_gpu(pod5_dr,bam_index,success_file,model_path,motif_seqs,args)
+            
         else:
             read_strand = _get_read_sequened_strand(args.basecall_subgroup)
             motif_seqs, chrom2len, fast5s_q, len_fast5s, \
