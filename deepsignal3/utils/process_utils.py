@@ -202,20 +202,20 @@ def get_motif_seqs(motifs, is_dna=True):
     return motif_seqs
 
 
-def get_fast5s(fast5_dir, is_recursive=True):
-    fast5_dir = os.path.abspath(fast5_dir)
-    fast5s = []
+def get_files(input_dir, is_recursive=True,file_type='.fast5'):
+    input_dir = os.path.abspath(input_dir)
+    inputs = []
     if is_recursive:
-        for root, dirnames, filenames in os.walk(fast5_dir):
-            for filename in fnmatch.filter(filenames, '*.fast5'):
-                fast5_path = os.path.join(root, filename)
-                fast5s.append(fast5_path)
+        for root, dirnames, filenames in os.walk(input_dir):
+            for filename in fnmatch.filter(filenames, '*'+file_type):
+                file_path = os.path.join(root, filename)
+                inputs.append(file_path)
     else:
-        for fast5_name in os.listdir(fast5_dir):
-            if fast5_name.endswith('.fast5'):
-                fast5_path = '/'.join([fast5_dir, fast5_name])
-                fast5s.append(fast5_path)
-    return fast5s
+        for file_name in os.listdir(input_dir):
+            if file_name.endswith(file_type):
+                file_path = '/'.join([input_dir, file_name])
+                inputs.append(file_path)
+    return inputs
 
 
 # functions for combining files and random sampling lines of txt files ================
