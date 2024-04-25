@@ -423,7 +423,19 @@ def display_args(args):
             print("{}:\n\t{}".format(arg_key, arg_vars[arg_key]))
     print("# ===============================================")
 
-
+def split_list(data, num_chunks):
+    
+    avg_chunk_size = len(data) // num_chunks
+    chunks = [data[i:i+avg_chunk_size] for i in range(0, len(data), avg_chunk_size)]
+    return chunks
+def _read_position_file(position_file):
+    key_sep = "||"
+    postions = set()
+    with open(position_file, 'r') as rf:
+        for line in rf:
+            words = line.strip().split("\t")
+            postions.add(key_sep.join(words[:3]))
+    return postions
 # for balancing kmer distri in training samples ===
 def _count_kmers_of_feafile(feafile):
     kmer_count = {}
@@ -455,7 +467,7 @@ def _get_kmer2lines(feafile):
     with open(feafile, "r") as rf:
         lcnt = 0
         for line in rf:
-            words = line.strip().split("\t")
+            words = line.strip().split()
             kmer = words[6]
             if kmer not in kmers:
                 kmers.add(kmer)
