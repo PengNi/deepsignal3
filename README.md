@@ -75,8 +75,9 @@ Example data, including training data and test data, can be downloaded from ([go
 To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG:
 
 ```bash
+# 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
-
+# 2. deepsignal3 call_mods
 CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 16
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 ```
@@ -230,3 +231,8 @@ wget https://github.com/nanoporetech/vbz_compression/releases/download/v1.0.1/on
 tar zxvf ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz
 export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/local/hdf5/lib/plugin
 ```
+
+## Todo
+
+- [ ] support data input format slow5 and blow5
+- [ ] support data input format bam
