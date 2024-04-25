@@ -37,6 +37,7 @@ from .utils.process_utils import display_args
 from .utils.process_utils import nproc_to_call_mods_in_cpu_mode
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
+from .utils.process_utils import get_files
 
 from .extract_features import _extract_preprocess
 
@@ -69,6 +70,43 @@ queue_size_border = 2000
 queue_size_border_f5batch = 100
 time_wait = 3
 
+def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
+    """
+    insertion: -1, deletion: -2, mismatch: -3
+    :param r_cigar_tuple: pysam.alignmentSegment.cigartuples
+    :param strand: 1/-1 for fwd/rev
+    :param seq_len: read alignment length
+    :return: query pos to ref pos
+    """
+    fill_invalid = -2
+    # get each base calls genomic position
+    q_to_r_poss = np.full(seq_len + 1, fill_invalid, dtype=np.int32)
+    # process cigar ops in read direction
+    curr_r_pos, curr_q_pos = 0, 0
+    cigar_ops = r_cigar_tuple if strand == 1 else r_cigar_tuple[::-1]
+    for op, op_len in cigar_ops:
+        if op == 1:
+            # inserted bases into ref
+            for q_pos in range(curr_q_pos, curr_q_pos + op_len):
+                q_to_r_poss[q_pos] = -1
+            curr_q_pos += op_len
+        elif op in (2, 3):
+            # deleted ref bases
+            curr_r_pos += op_len
+        elif op in (0, 7, 8):
+            # aligned bases
+            for op_offset in range(op_len):
+                q_to_r_poss[curr_q_pos + op_offset] = curr_r_pos + op_offset
+            curr_q_pos += op_len
+            curr_r_pos += op_len
+        elif op == 6:
+            # padding (shouldn't happen in mappy)
+            pass
+    q_to_r_poss[curr_q_pos] = curr_r_pos
+    if q_to_r_poss[-1] == fill_invalid:
+        raise ValueError(('Invalid cigar string encountered. Reference length: {}  Cigar ' +
+                          'implied reference length: {}').format(seq_len, curr_r_pos))
+    return q_to_r_poss
 
 def _read_features_file(features_file, features_batch_q, r_batch_size=10):
     LOGGER.info("read_features process-{} starts".format(os.getpid()))
@@ -517,8 +555,25 @@ def process_data(data,motif_seqs,kmer_len,signals_len,methyloc=0,methy_label=1):
     seq=seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
-    strand="-" if seq_read.is_reverse else '+'
-    ref_start=seq_read.reference_start
+    strand='.'
+    q_to_r_poss = None
+    if not seq_read.is_unmapped:
+        strand="-" if seq_read.is_reverse else '+'
+        strand_code=-1 if seq_read.is_reverse else 1
+        ref_start=seq_read.reference_start
+        ref_end=seq_read.reference_end
+        cigar_tuples=seq_read.cigartuples
+        qalign_start=seq_read.query_alignment_start
+        qalign_end=seq_read.query_alignment_end
+        if seq_read.is_reverse:
+            seq_start = len(seq) - qalign_end
+            seq_end = len(seq) - qalign_start
+        else:
+            seq_start = qalign_start
+            seq_end = qalign_end
+        q_to_r_poss = get_q2tloc_from_cigar(cigar_tuples, strand_code, (seq_end - seq_start))
+    else:
+        LOGGER.info('Temporarily do not recommend using umapped read {}'.format(seq_read.query_name))
     sampleinfo = []  # contains: chromosome, pos, strand, pos_in_strand, read_name, read_strand
     kmers = []
     base_means = []
@@ -529,10 +584,19 @@ def process_data(data,motif_seqs,kmer_len,signals_len,methyloc=0,methy_label=1):
     labels = []
     for loc_in_read in tsite_locs:
         if num_bases <= loc_in_read < len(seq) - num_bases:
-            if strand == '-':
-                pos = ref_start + len(seq) - 1 - loc_in_read
-            else:
-                pos = ref_start + loc_in_read
+            ref_pos = -1
+            if not seq_read.is_unmapped:
+                if seq_start <= loc_in_read < seq_end:
+                    offset_idx = loc_in_read - seq_start
+                    if q_to_r_poss[offset_idx] != -1:
+                        if strand == '-':
+                            #pos = '.'#loc_in_read
+                            ref_pos = ref_end  - 1 - q_to_r_poss[offset_idx]
+                        else:
+                            #pos = loc_in_read
+                            ref_pos = ref_start + q_to_r_poss[offset_idx]
+                else:
+                    continue
             k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
             k_seq=[base2code_dna[x] for x in k_mer]
             k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
@@ -547,7 +611,7 @@ def process_data(data,motif_seqs,kmer_len,signals_len,methyloc=0,methy_label=1):
                 ref_name='.'
             else:
                 ref_name=seq_read.reference_name
-            sampleinfo.append('\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand]))
+            sampleinfo.append('\t'.join([ref_name,str(ref_pos) , 't', '.', seq_read.query_name, strand]))
             kmers.append(k_seq)
             base_means.append(signal_means)
             base_stds.append(signal_stds)
@@ -583,7 +647,7 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,kmer_len,signals_len,r
                         feature_Q.put(feature_lists)
                         chunk=[]               
                 except KeyError:
-                    print('Read:%s not found in BAM file' %read_name, flush=True)
+                    LOGGER.info('Read:%s not found in BAM file' %read_name, flush=True)
                     continue
     if len(chunk)>0:
         feature_Q.put(chunk)
@@ -619,11 +683,7 @@ def call_mods(args):
             motif_seqs = get_motif_seqs(args.motifs, is_dna)
             
             #ctx_fork = mp.get_context('fork')
-            pod5_dr=[]
-            for pod5_name in os.listdir(input_path):
-                if pod5_name.endswith('.pod5'):
-                    pod5_path = '/'.join([input_path, pod5_name])
-                    pod5_dr.append(pod5_path)
+            pod5_dr=pod5_dr=get_files(input_path,is_recursive,'.pod5')
             _call_mods_from_pod5_gpu(pod5_dr,bam_index,success_file,model_path,motif_seqs,args)
             
         else:
