@@ -43,7 +43,7 @@ from .utils.process_utils import _read_position_file
 LOGGER = get_logger(__name__)
 
 queue_size_border = 2000
-time_wait = 3
+time_wait = 1
 
 key_sep = "||"
 
@@ -51,7 +51,43 @@ MAP_RES = namedtuple('MAP_RES', (
     'read_id', 'q_seq', 'ref_seq', 'ctg', 'strand', 'r_st', 'r_en',
     'q_st', 'q_en', 'cigar', 'mapq'))
 
-
+def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
+    """
+    insertion: -1, deletion: -2, mismatch: -3
+    :param r_cigar_tuple: pysam.alignmentSegment.cigartuples
+    :param strand: 1/-1 for fwd/rev
+    :param seq_len: read alignment length
+    :return: query pos to ref pos
+    """
+    fill_invalid = -2
+    # get each base calls genomic position
+    q_to_r_poss = np.full(seq_len + 1, fill_invalid, dtype=np.int32)
+    # process cigar ops in read direction
+    curr_r_pos, curr_q_pos = 0, 0
+    cigar_ops = r_cigar_tuple if strand == 1 else r_cigar_tuple[::-1]
+    for op, op_len in cigar_ops:
+        if op == 1:
+            # inserted bases into ref
+            for q_pos in range(curr_q_pos, curr_q_pos + op_len):
+                q_to_r_poss[q_pos] = -1
+            curr_q_pos += op_len
+        elif op in (2, 3):
+            # deleted ref bases
+            curr_r_pos += op_len
+        elif op in (0, 7, 8):
+            # aligned bases
+            for op_offset in range(op_len):
+                q_to_r_poss[curr_q_pos + op_offset] = curr_r_pos + op_offset
+            curr_q_pos += op_len
+            curr_r_pos += op_len
+        elif op == 6:
+            # padding (shouldn't happen in mappy)
+            pass
+    q_to_r_poss[curr_q_pos] = curr_r_pos
+    if q_to_r_poss[-1] == fill_invalid:
+        raise ValueError(('Invalid cigar string encountered. Reference length: {}  Cigar ' +
+                          'implied reference length: {}').format(seq_len, curr_r_pos))
+    return q_to_r_poss
 
 ################utils###################
 def _read_position_file(position_file):
@@ -103,15 +139,34 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
     seq=seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
-    strand="-" if seq_read.is_reverse else '+'
-    ref_start=seq_read.reference_start
-    
+    strand='.'
+    q_to_r_poss = None
+    if not seq_read.is_unmapped:
+        strand="-" if seq_read.is_reverse else '+'
+        strand_code=-1 if seq_read.is_reverse else 1
+        ref_start=seq_read.reference_start
+        ref_end=seq_read.reference_end
+        cigar_tuples=seq_read.cigartuples
+        qalign_start=seq_read.query_alignment_start
+        qalign_end=seq_read.query_alignment_end
+        if seq_read.is_reverse:
+            seq_start = len(seq) - qalign_end
+            seq_end = len(seq) - qalign_start
+        else:
+            seq_start = qalign_start
+            seq_end = qalign_end
+        q_to_r_poss = get_q2tloc_from_cigar(cigar_tuples, strand_code, (seq_end - seq_start))
     for loc_in_read in tsite_locs:
         if num_bases <= loc_in_read < len(seq) - num_bases:
-            if strand == '-':
-                pos = ref_start + len(seq) - 1 - loc_in_read
+            if seq_read.is_unmapped:
+                ref_pos = -1
             else:
-                pos = ref_start + loc_in_read
+                if strand == '-':
+                    #pos = '.'#loc_in_read
+                    ref_pos = ref_end  - 1 - q_to_r_poss[loc_in_read-seq_start]
+                else:
+                    #pos = loc_in_read
+                    ref_pos = ref_start + q_to_r_poss[loc_in_read-seq_start]
             k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
             #k_seq=[base2code_dna[x] for x in k_mer]
             k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
@@ -127,10 +182,10 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
             else:
                 ref_name=seq_read.reference_name
             #sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
-            if (positions is not None) and (key_sep.join([ref_name,str(pos), strand]) not in positions):
+            if (positions is not None) and (key_sep.join([ref_name,str(ref_pos), strand]) not in positions):
                 continue
             
-            features_list.append(_features_to_str((ref_name,str(pos) , strand, '.', seq_read.query_name, '.',k_mer, signal_means, signal_stds,signal_lens,
+            features_list.append(_features_to_str((ref_name,str(ref_pos) , strand, '.', seq_read.query_name, '.',k_mer, signal_means, signal_stds,signal_lens,
                                     _get_signals_rect(k_signals, signals_len),methy_label)))
     return features_list
 def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len,qsize_limit=4,time_wait=1):
@@ -240,16 +295,16 @@ def main():
     ep_input = extraction_parser.add_argument_group("INPUT")
     ep_input.add_argument("--input_dir", "-i", action="store", type=str,
                           required=True,
-                          help="the directory of fast5 files")
+                          help="the directory of pod5 files")
     ep_input.add_argument("--recursively", "-r", action="store", type=str, required=False,
                           default='yes',
-                          help='is to find fast5 files from input_dir recursively. '
+                          help='is to find pod5 files from input_dir recursively. '
                                'default true, t, yes, 1')
     ep_input.add_argument("--reference_path", action="store",
                           type=str, required=False,default=None,
                           help="the reference file to be used, usually is a .fa file")
     ep_input.add_argument("--rna", action="store_true", default=False, required=False,
-                          help='the fast5 files are from RNA samples. if is rna, the signals are reversed. '
+                          help='the fast5/pod5 files are from RNA samples. if is rna, the signals are reversed. '
                                'NOTE: Currently no use, waiting for further extentsion')
     ep_input.add_argument('--bam', type=str, 
                         help='the bam filepath')
