@@ -158,15 +158,19 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
         q_to_r_poss = get_q2tloc_from_cigar(cigar_tuples, strand_code, (seq_end - seq_start))
     for loc_in_read in tsite_locs:
         if num_bases <= loc_in_read < len(seq) - num_bases:
-            if seq_read.is_unmapped:
-                ref_pos = -1
-            else:
-                if strand == '-':
-                    #pos = '.'#loc_in_read
-                    ref_pos = ref_end  - 1 - q_to_r_poss[loc_in_read-seq_start]
+            ref_pos = -1
+            if not seq_read.is_unmapped:
+                if seq_start <= loc_in_read < seq_end:
+                    offset_idx = loc_in_read - seq_start
+                    if q_to_r_poss[offset_idx] != -1:
+                        if strand == '-':
+                            #pos = '.'#loc_in_read
+                            ref_pos = ref_end  - 1 - q_to_r_poss[offset_idx]
+                        else:
+                            #pos = loc_in_read
+                            ref_pos = ref_start + q_to_r_poss[offset_idx]
                 else:
-                    #pos = loc_in_read
-                    ref_pos = ref_start + q_to_r_poss[loc_in_read-seq_start]
+                    continue
             k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
             #k_seq=[base2code_dna[x] for x in k_mer]
             k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
