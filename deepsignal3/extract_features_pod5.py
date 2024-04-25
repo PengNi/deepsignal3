@@ -31,12 +31,10 @@ from .utils.process_utils import complement_seq
 from .utils.ref_reader import get_contig2len
 from .utils.ref_reader import get_contig2len_n_seq
 
-from .utils import fast5_reader
+
 from .utils.process_utils import base2code_dna
 from .utils import bam_reader
-# from .utils.process_utils import generate_aligner_with_options
 
-import re
 from .utils.process_utils import CIGAR_REGEX
 from .utils.process_utils import CIGAR2CODE
 
@@ -46,6 +44,11 @@ from collections import namedtuple
 from .utils.process_utils import get_logger
 import pod5
 import pysam
+from .extract_features import _group_signals_by_movetable_v2
+from .extract_features import _get_signals_rect
+from .extract_features import _write_featurestr
+from .utils.process_utils import split_list
+from .utils.process_utils import _read_position_file
 
 LOGGER = get_logger(__name__)
 
@@ -59,449 +62,8 @@ MAP_RES = namedtuple('MAP_RES', (
     'q_st', 'q_en', 'cigar', 'mapq'))
 
 
-# extract readseq with mapped signals ===================================================
-def _group_signals_by_movetable_v2(trimed_signals, movetable, stride):
-    """
 
-    :param trimed_signals:
-    :param movetable: numpy array
-    :param stride:
-    :return:
-    """
-    assert movetable[0] == 1
-    # TODO: signal_duration not exactly equal to call_events * stride
-    # TODO: maybe this move * stride way is not right!
-    assert len(trimed_signals) >= len(movetable) * stride
-    signal_group = []
-    move_pos = np.append(np.argwhere(movetable == 1).flatten(), len(movetable))
-    for move_idx in range(len(move_pos) - 1):
-        start, end = move_pos[move_idx], move_pos[move_idx + 1]
-        signal_group.append(trimed_signals[(start * stride):(end * stride)].tolist())
-    assert len(signal_group) == np.sum(movetable)
-    return signal_group
-
-
-def _get_base_prob_from_tracetable(tracetable, movetable):
-    if tracetable is None:
-        return []
-    assert movetable[0] == 1
-    assert len(movetable) == len(tracetable)
-    base_probs = []
-    move_pos = np.append(np.argwhere(movetable == 1).flatten(), len(movetable))
-    for move_idx in range(len(move_pos) - 1):
-        start, end = move_pos[move_idx], move_pos[move_idx + 1]
-        prob_col = np.sum(tracetable[start:end, :], axis=0)
-        prob_all = np.sum(prob_col)
-        base_probs.append(prob_col / prob_all)
-    return base_probs
-
-
-def _normalize_signals(signals, normalize_method="mad"):
-    if normalize_method == 'zscore':
-        sshift, sscale = np.mean(signals), float(np.std(signals))
-    elif normalize_method == 'mad':
-        sshift, sscale = np.median(signals), float(robust.mad(signals))
-    else:
-        raise ValueError("")
-    if sscale == 0.0:
-        norm_signals = signals
-    else:
-        norm_signals = (signals - sshift) / sscale
-    return np.around(norm_signals, decimals=6)
-
-
-def _get_read_sequened_strand(basecall_subgroup='BaseCalled_template'):
-    if basecall_subgroup.endswith('template'):
-        strand = 't'
-    else:
-        strand = 'c'
-    return strand
-
-
-# Move table:
-# https://github.com/adnaniazi/tailfindr/blob/master/R/extract-read-data.R
-# https://github.com/Fabianexe/SlaPPy/blob/master/slappy/fast5/__init__.py
-# TODO: consider RNA mode, raw signals need to be reversed?
-def _get_read_signalinfo(pod5_record,bam_record,norm_method,readname,unmapped=False):
-    """
-
-    :param read_path:
-    :param basecall_group:
-    :param basecall_subgroup:
-    :param norm_method:
-    :param readname: if is_single=False, readname must not be ""
-    :param is_single: is the read_path is in single-read format
-    :return: success(0/1), (readid, baseseq, signal_group)
-    """
-    try:
-        success = 1
-        read_record=bam_reader.Read(pod5_record,bam_record,readname)
-        read_record.check_signal()
-        read_record.check_seq()
-        readid = read_record.get_readid()
-        baseseq = read_record.get_seq()
-        movetable = read_record.get_move()
-        signal_stride = read_record.get_stride()
-        
-        rawsignals = read_record.rescale_signals()
-        mapsignals = _normalize_signals(rawsignals,
-                                        norm_method)
-        signal_group = _group_signals_by_movetable_v2(mapsignals, movetable, signal_stride)
-        tracetable = None
-        base_probs = _get_base_prob_from_tracetable(tracetable, movetable)
-        mapinfo = None
-        if not unmapped:
-            read_record.check_map(bam_record)
-            mapinfo = read_record.get_map_info(bam_record)
-            #print('mapped')
-            #cigartuple, chrom_strands, frags= mapinfo[0]
-            #print(cigartuple)
-                 
-
-        return success, (readid, baseseq, signal_group, base_probs, mapinfo)
-    except IOError:
-        LOGGER.error('Error in reading read_id-{}, skipping'.format(readname))
-        return 0, None
-    except AssertionError:
-        if unmapped:
-            LOGGER.error('seq or sig is None, read_id-{}, skipping'.format(readname))
-        else:
-            if bam_record.is_unmapped:
-                LOGGER.error('unmapped, read_id-{}, skipping'.format(readname))
-        return 0, None
-    except KeyError:
-        LOGGER.error('Error in getting group from read_id-{}, skipping'.format(readname))
-        return 0, None
-    except TypeError:
-        LOGGER.error('Error in building read_record from read_id-{}, skipping'.format(readname))
-        return 0, None
-# =======================================================================================
-
-
-# map signals to refseq =================================================================
-# from megalodon.mapping
-def get_aligner(ref_path, best_n):
-    LOGGER.info("get mappy(minimap2) Aligner")
-    aligner = mappy.Aligner(str(ref_path),
-                            preset=str("map-ont"),
-                            best_n=best_n)
-    return aligner
-
-
-def align_read(q_seq, aligner, map_thr_buf, read_id=None):
-    try:
-        # enumerate all alignments to avoid memory leak from mappy
-        r_algn = list(aligner.map(str(q_seq), buf=map_thr_buf))[0]
-    except IndexError:
-        # alignment not produced
-        return None
-
-    ref_seq = str(aligner.seq(r_algn.ctg, r_algn.r_st, r_algn.r_en)).upper()
-    if r_algn.strand == -1:
-        try:
-            ref_seq = complement_seq(ref_seq)
-        except KeyError:
-            LOGGER.debug("ref_seq contions U base: {}".format(ref_seq))
-            ref_seq = complement_seq(ref_seq, "RNA")
-    # coord 0-based
-    return MAP_RES(
-        read_id=read_id, q_seq=str(q_seq).upper(), ref_seq=ref_seq, ctg=r_algn.ctg,
-        strand=r_algn.strand, r_st=r_algn.r_st, r_en=r_algn.r_en,
-        q_st=r_algn.q_st, q_en=r_algn.q_en, cigar=r_algn.cigar,
-        mapq=r_algn.mapq)
-
-
-# from megalodon.mapping
-def _compute_pct_identity(cigar):
-    nalign, nmatch = 0, 0
-    for op_len, op in cigar:
-        if op not in (4, 5):
-            nalign += op_len
-        if op in (0, 7):
-            nmatch += op_len
-    return nmatch / float(nalign)
-
-
-# from megalodon.mapping
-def parse_cigar(r_cigar, strand, ref_len):
-    fill_invalid = -1
-    # get each base calls genomic position
-    r_to_q_poss = np.full(ref_len + 1, fill_invalid, dtype=np.int32)
-    # process cigar ops in read direction
-    curr_r_pos, curr_q_pos = 0, 0
-    cigar_ops = r_cigar if strand == 1 else r_cigar[::-1]
-    for op_len, op in cigar_ops:
-        if op == 1:
-            # inserted bases into ref
-            curr_q_pos += op_len
-        elif op in (2, 3):
-            # deleted ref bases
-            for r_pos in range(curr_r_pos, curr_r_pos + op_len):
-                r_to_q_poss[r_pos] = curr_q_pos
-            curr_r_pos += op_len
-        elif op in (0, 7, 8):
-            # aligned bases
-            for op_offset in range(op_len):
-                r_to_q_poss[curr_r_pos + op_offset] = curr_q_pos + op_offset
-            curr_q_pos += op_len
-            curr_r_pos += op_len
-        elif op == 6:
-            # padding (shouldn't happen in mappy)
-            pass
-    r_to_q_poss[curr_r_pos] = curr_q_pos
-    if r_to_q_poss[-1] == fill_invalid:
-        raise ValueError((
-            'Invalid cigar string encountered. Reference length: {}  Cigar ' +
-            'implied reference length: {}').format(ref_len, curr_r_pos))
-
-    return r_to_q_poss
-
-
-def _map_read_to_ref_process(aligner, map_conn):
-    map_thr_buf = mappy.ThreadBuffer()
-    LOGGER.debug("align process starts")
-    while True:
-        try:
-            read_id, q_seq = map_conn.recv()
-        except EOFError:
-            LOGGER.debug("align process ending")
-            break
-        map_res = align_read(q_seq, aligner, map_thr_buf, read_id)
-        if map_res is None:
-            map_conn.send((0, None))
-        else:
-            map_res = tuple(map_res)
-            map_conn.send((1, map_res))
-# =======================================================================================
-
-
-# =======extract mapinfo from fast5 =====================================================
-def _convert_cigarstring2tuple(cigarstr):
-    # tuple in (oplen, op) format, like 30M -> (30, 0)
-    return [(int(m[0]), CIGAR2CODE[m[-1]]) for m in CIGAR_REGEX.findall(cigarstr)]
-# =======================================================================================
-
-
-# extract signals of kmers ==============================================================
-def _get_signals_rect(signals_list, signals_len=16, pad_only_r=False):
-    signals_rect = []
-    for signals_tmp in signals_list:
-        signals = list(np.around(signals_tmp, decimals=6))
-        if len(signals) < signals_len:
-            pad0_len = signals_len - len(signals)
-            if not pad_only_r:
-                pad0_left = pad0_len // 2
-                pad0_right = pad0_len - pad0_left
-                signals = [0.] * pad0_left + signals + [0.] * pad0_right
-            else:
-                signals = signals + [0.] * pad0_len
-        elif len(signals) > signals_len:
-            signals = [signals[x] for x in sorted(random.sample(range(len(signals)),
-                                                                signals_len))]
-        signals_rect.append(signals)
-    return signals_rect
-
-def _extract_features_nomapping(info, motif_seqs, chrom2len, positions,
-                      mod_loc, seq_len, signal_len, methy_label,
-                      pad_only_r):
-    read_id,read_seq,readlocs,read_signal_grp=info
-    if seq_len % 2 == 0:
-        raise ValueError("--seq_len must be odd")
-    num_bases = (seq_len - 1) // 2
-
-    feature_lists = []
-    offsets = get_refloc_of_methysite_in_motif(read_seq, set(motif_seqs), mod_loc)
-    for off_loc_i in range(len(offsets)):
-        off_loc_b = offsets[off_loc_i-1] if off_loc_i!=0 else -1
-        off_loc = offsets[off_loc_i]
-        off_loc_a = offsets[off_loc_i+1] if off_loc_i!=len(offsets)-1 else -1
-        if num_bases <= off_loc < len(read_seq) - num_bases:
-            read_loc = readlocs[off_loc]
-            tag=1
-            if off_loc_b!=-1:
-                read_loc_b=readlocs[off_loc_b]
-                if abs(read_loc-read_loc_b)<=10:
-                    tag=0
-            if off_loc_a!=-1:
-                read_loc_a=readlocs[off_loc_a]
-                if abs(read_loc_a-read_loc)<=10:
-                    tag=0
-            abs_loc = read_loc
-            loc_in_strand = read_loc
-            k_mer = read_seq[(off_loc - num_bases):(off_loc + num_bases + 1)]
-            k_signals = read_signal_grp[(off_loc - num_bases):(off_loc + num_bases + 1)]#matrix
-            
-            #k_baseprobs = read_baseprobs[(off_loc - num_bases):(off_loc + num_bases + 1)] if len(read_baseprobs)>0 else np.zero(seq_len)
-
-            signal_lens = [len(x) for x in k_signals]
-
-            signal_means = [np.mean(x) for x in k_signals]
-            signal_stds = [np.std(x) for x in k_signals]
-            chrom='.'
-            strand='.'
-
-            k_signals_rect = _get_signals_rect(k_signals, signal_len, pad_only_r)
-            feature_lists.append((chrom, abs_loc, strand, loc_in_strand, read_id, read_loc,
-                                  k_mer, signal_means, signal_stds, signal_lens,
-                                  k_signals_rect, methy_label,tag))
-    if len(feature_lists)==0:
-        LOGGER.info(f"{read_id} feature_lists is empty")
-    return feature_lists
-
-def _extract_features(ref_mapinfo, motif_seqs, chrom2len, positions, read_strand,
-                      mod_loc, seq_len, signal_len, methy_label,
-                      pad_only_r):
-    # read_id, ref_seq, chrom, strand, r_st, r_en, ref_signal_grp, ref_baseprobs = ref_mapinfo
-    # strand = "+" if strand == 1 else "-"
-
-    # seg_mapping: (len(ref_seq), item_chrom, strand_code, item_ref_s, item_ref_e)
-    read_id, ref_seq, ref_readlocs, ref_signal_grp, ref_baseprobs, seg_mapping = ref_mapinfo
-
-    if seq_len % 2 == 0:
-        raise ValueError("--seq_len must be odd")
-    num_bases = (seq_len - 1) // 2
-
-    feature_lists = []
-    # WARN: cannot make sure the ref_offsets are all targeted motifs in corresponding read,
-    # WARN: cause there may be mismatches/indels in those postions.
-    # WARN: see also parse_cigar()/_process_read_map()/_process_read_nomap()
-    ref_offsets = get_refloc_of_methysite_in_motif(ref_seq, set(motif_seqs), mod_loc)
-    for off_loc_i in range(len(ref_offsets)):
-        off_loc_b = ref_offsets[off_loc_i-1] if off_loc_i!=0 else -1
-        off_loc = ref_offsets[off_loc_i]
-        off_loc_a = ref_offsets[off_loc_i+1] if off_loc_i!=len(ref_offsets)-1 else -1
-        if num_bases <= off_loc < len(ref_seq) - num_bases:
-            chrom, strand, r_st, r_en = None, None, None, None
-            seg_off_loc = None
-            seg_len_accum = 0
-            for seg_tmp in seg_mapping:
-                seg_len_accum += seg_tmp[0]
-                if off_loc < seg_len_accum:
-                    seg_off_loc = off_loc - (seg_len_accum - seg_tmp[0])
-                    chrom, strand, r_st, r_en = seg_tmp[1:]
-                    strand = "+" if strand == 1 else "-"
-                    break
-
-            abs_loc = r_st + seg_off_loc if strand == "+" else r_en - 1 - seg_off_loc
-            read_loc = ref_readlocs[off_loc]
-            tag=1
-            if off_loc_b!=-1:
-                read_loc_b=ref_readlocs[off_loc_b]
-                if abs(read_loc-read_loc_b)<=10:
-                    tag=0
-            if off_loc_a!=-1:
-                read_loc_a=ref_readlocs[off_loc_a]
-                if abs(read_loc_a-read_loc)<=10:
-                    tag=0
-
-            if (positions is not None) and (key_sep.join([chrom, str(abs_loc), strand]) not in positions):
-                continue
-
-            loc_in_strand = abs_loc if (strand == "+" or chrom == "read") else chrom2len[chrom] - 1 - abs_loc
-            k_mer = ref_seq[(off_loc - num_bases):(off_loc + num_bases + 1)]
-            k_signals = ref_signal_grp[(off_loc - num_bases):(off_loc + num_bases + 1)]#matrix
-            
-            k_baseprobs = ref_baseprobs[(off_loc - num_bases):(off_loc + num_bases + 1)] if len(ref_baseprobs)>0 else np.zero(seq_len)
-
-            signal_lens = [len(x) for x in k_signals]
-
-            signal_means = [np.mean(x) for x in k_signals]
-            signal_stds = [np.std(x) for x in k_signals]
-
-            k_signals_rect = _get_signals_rect(k_signals, signal_len, pad_only_r)
-
-            feature_lists.append((chrom, abs_loc, strand, loc_in_strand, read_id, read_loc,
-                                  k_mer, signal_means, signal_stds, signal_lens,
-                                  k_signals_rect, methy_label,tag))
-    if len(feature_lists)==0:
-        LOGGER.info(f"{read_id} feature_lists is empty")
-    return feature_lists
-# =======================================================================================
-
-
-# write =================================================================================
-def _features_to_str(features):
-    """
-    :param features: a tuple
-    :return:
-    """
-    chrom, pos, alignstrand, loc_in_ref, readname, read_loc, k_mer, signal_means, signal_stds, \
-        signal_lens, k_signals_rect, methy_label,\
-        tag = features
-    means_text = ','.join([str(x) for x in np.around(signal_means, decimals=6)])
-    stds_text = ','.join([str(x) for x in np.around(signal_stds, decimals=6)])
-    signal_len_text = ','.join([str(x) for x in signal_lens])
-    #base_probs_text = ",".join([str(x) for x in np.around(k_baseprobs, decimals=6)])
-    k_signals_text = ';'.join([",".join([str(y) for y in x]) for x in k_signals_rect])
-
-    return "\t".join([chrom, str(pos), alignstrand, str(loc_in_ref), readname, str(read_loc), k_mer, means_text,
-                      stds_text, signal_len_text, k_signals_text, str(methy_label),str(tag)])
-
-
-def _write_featurestr_to_file(write_fp, featurestr_q):
-    LOGGER.info('write_process-{} starts'.format(os.getpid()))
-    with open(write_fp, 'w') as wf:
-        while True:
-            # during test, it's ok without the sleep(time_wait)
-            if featurestr_q.empty():
-                time.sleep(time_wait)
-                continue
-            features_str = featurestr_q.get()
-            if features_str == "kill":
-                LOGGER.info('write_process-{} finished'.format(os.getpid()))
-                break
-            for one_features_str in features_str:
-                wf.write(one_features_str + "\n")
-            wf.flush()
-
-
-def _write_featurestr_to_dir(write_dir, featurestr_q, w_batch_num):
-    LOGGER.info('write_process-{} starts'.format(os.getpid()))
-    if os.path.exists(write_dir):
-        if os.path.isfile(write_dir):
-            raise FileExistsError("{} already exists as a file, please use another write_dir".format(write_dir))
-    else:
-        os.makedirs(write_dir)
-
-    file_count = 0
-    wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
-    batch_count = 0
-    while True:
-        # during test, it's ok without the sleep(time_wait)
-        if featurestr_q.empty():
-            time.sleep(time_wait)
-            continue
-        features_str = featurestr_q.get()
-        if features_str == "kill":
-            LOGGER.info('write_process-{} finished'.format(os.getpid()))
-            break
-
-        if batch_count >= w_batch_num:
-            wf.flush()
-            wf.close()
-            file_count += 1
-            wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
-            batch_count = 0
-        for one_features_str in features_str:
-            wf.write(one_features_str + "\n")
-        batch_count += 1
-
-
-def _write_featurestr(write_fp, featurestr_q, w_batch_num=10000, is_dir=False):
-    if is_dir:
-        _write_featurestr_to_dir(write_fp, featurestr_q, w_batch_num)
-    else:
-        _write_featurestr_to_file(write_fp, featurestr_q)
-# =======================================================================================
-
-
-def _fill_files_queue(data_q, read_ids, batch_size):
-
-    for i in np.arange(0, len(read_ids), batch_size):
-        data_q.put(read_ids[i:(i+batch_size)])
-    return
-
-
+################utils###################
 def _read_position_file(position_file):
     postions = set()
     with open(position_file, 'r') as rf:
@@ -510,534 +72,106 @@ def _read_position_file(position_file):
             postions.add(key_sep.join(words[:3]))
     return postions
 
+def _features_to_str(features):
+    """
+    :param features: a tuple
+    :return:
+    """
+    chrom, pos, alignstrand, loc_in_ref, readname, read_loc, k_mer, signal_means, signal_stds, \
+        signal_lens, k_signals_rect, methy_label = features
+    means_text = ','.join([str(x) for x in np.around(signal_means, decimals=6)])
+    stds_text = ','.join([str(x) for x in np.around(signal_stds, decimals=6)])
+    signal_len_text = ','.join([str(x) for x in signal_lens])
+    #base_probs_text = ",".join([str(x) for x in np.around(k_baseprobs, decimals=6)])
+    k_signals_text = ';'.join([",".join([str(y) for y in x]) for x in k_signals_rect])
+    #freq_text = ';'.join([",".join([str(y) for y in x]) for x in freq])
 
-def _extract_preprocess(motifs, is_dna, reference_path, f5_batch_num,
-                        position_file, args,bam_index,pod5_dataset):
+    return "\t".join([chrom, str(pos), alignstrand, str(loc_in_ref), readname, str(read_loc), k_mer, means_text,
+                      stds_text, signal_len_text, k_signals_text, str(methy_label)])
 
-
-    both_read_ids, num_reads=bam_reader.get_read_ids(bam_index,pod5_dataset)
-    LOGGER.info("{} reads in total".format(num_reads))
-    LOGGER.info("{} reads in total, escape multiple mapping and child reads".format(len(both_read_ids)))
-
-    LOGGER.info("parse the motifs string")
-    motif_seqs = get_motif_seqs(motifs, is_dna)
-
-    LOGGER.info("read genome reference file")
-    if args.mapping:
-        chrom2len = get_contig2len(reference_path)
-        contigs = None
+def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy_label=1):
+    if kmer_len % 2 == 0:
+        raise ValueError("kmer_len must be odd")
+    num_bases = (kmer_len - 1) // 2
+    features_list = []
+    signal,seq_read=data
+    read_dict=dict(seq_read.tags)
+    mv_table=np.asarray(read_dict['mv'][1:])
+    stride=int(read_dict['mv'][0])
+    num_trimmed=read_dict["ts"]
+    norm_shift = read_dict["sm"]
+    norm_scale = read_dict["sd"]
+    if num_trimmed >= 0:
+        signal_trimmed = (signal[num_trimmed:] - norm_shift) / norm_scale
     else:
-        if reference_path!=None:
-            chrom2len, contigs = get_contig2len_n_seq(reference_path)
-        else:
-            chrom2len, contigs = None
-
-    LOGGER.info("read position file if it is not None")
-    positions = None
-    if position_file is not None:
-        positions = _read_position_file(position_file)
-
-    data_q = Queue()
-
-    _fill_files_queue(data_q, both_read_ids, f5_batch_num)
-    return motif_seqs, chrom2len, data_q, len(both_read_ids), positions, contigs
-
+        signal_trimmed = (signal[:num_trimmed] - norm_shift) / norm_scale
+    sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    if sscale == 0.0:
+        norm_signals = signal_trimmed
+    else:
+        norm_signals = (signal_trimmed - sshift) / sscale
+    seq=seq_read.get_forward_sequence()
+    signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
+    tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
+    strand="-" if seq_read.is_reverse else '+'
+    ref_start=seq_read.reference_start
     
-
-
-# for call_mods module
-def _batchlize_features_list(features_list):
-    sampleinfo = []  # contains: chromosome, pos, strand, pos_in_strand, read_name, read_loc
-    kmers = []
-    base_means = []
-    base_stds = []
-    base_signal_lens = []
-    base_probs = []
-    k_signals = []
-    labels = []
-    tags = []
-    for features in features_list:
-        chrom, pos, alignstrand, loc_in_ref, readname, read_loc, k_mer, signal_means, signal_stds, \
-            signal_lens, kmer_probs, kmer_base_signals, f_methy_label, f_tag = features
-
-        sampleinfo.append("\t".join([chrom, str(pos), alignstrand, str(loc_in_ref), readname,
-                                     str(read_loc)]))
-        kmers.append([base2code_dna[x] for x in k_mer])
-        base_means.append(signal_means)
-        base_stds.append(signal_stds)
-        base_signal_lens.append(signal_lens)
-        base_probs.append(kmer_probs)
-        k_signals.append(kmer_base_signals)
-        labels.append(f_methy_label)
-        tags.append(f_tag)
-    features_batches = (sampleinfo, kmers, base_means, base_stds,
-                        base_signal_lens, base_probs, k_signals, labels,tags)
-    return features_batches
-
-
-# pipe process, minimap2 ==========================================================================
-def _process_read_unmapped(extract_conn,
-                  pod5_record,bam_record,norm_method,
-                  mapq, identity, coverage_ratio,
-                  motif_seqs, chrom2len, positions, read_strand,
-                  mod_loc, seq_len, signal_len, methy_label,
-                  pad_only_r,
-                  read_id):
-    # input: f5_path
-    # output: features_list
-    # -1: read fast5 error, -2: align read error, -3: quality too low
-    success, readinfo = _get_read_signalinfo(pod5_record,bam_record, norm_method,
-                                             read_id,
-                                             unmapped=True,)
-    if success == 0:
-        #print(f"{read_id} get read signal information fail")
-        return -1, None
-
-    # base_probs: array of (read_len, 4)
-    read_id, baseseq, signal_group, base_probs, _ = readinfo
-    extract_conn.send((read_id, baseseq))
-    success, map_res = extract_conn.recv()
-    if success == 0:
-        #print(f"{read_id} map fail")
-        return -2, None
-
-    map_res = MAP_RES(*map_res)
-    if map_res.mapq < mapq:
-        LOGGER.info("mapq too low: {}, mapq: {}".format(map_res.read_id, map_res.mapq))
-        return -3, None
-    if _compute_pct_identity(map_res.cigar) < identity:
-        LOGGER.info("identity too low: {}, identity: {}".format(map_res.read_id,
-                                                                 _compute_pct_identity(map_res.cigar)))
-        return -3, None
-    if (map_res.q_en - map_res.q_st) / float(len(map_res.q_seq)) < coverage_ratio:
-        #print("too small than coverage ratio")
-        return -3, None
-    try:
-        r_to_q_poss = parse_cigar(map_res.cigar, map_res.strand, len(map_res.ref_seq))
-    except Exception:
-        LOGGER.info("cigar parsing error: {}".format(map_res.read_id))
-        return 0, None
-    #if success != 1:
-    #    print(f"no success with unrecognized error code {success} at read: {read_id}")
-
-    ref_signal_grp = [None, ] * len(map_res.ref_seq)
-    ref_baseprobs = [0., ] * len(map_res.ref_seq)
-    ref_readlocs = [0, ] * len(map_res.ref_seq)
-    for ref_pos, q_pos in enumerate(r_to_q_poss[:-1]):
-        # signal groups
-        ref_signal_grp[ref_pos] = signal_group[q_pos + map_res.q_st]
-        ref_readlocs[ref_pos] = q_pos + map_res.q_st
-        # trace
-        try:
-            base_idx = base2code_dna[map_res.ref_seq[ref_pos]]
-            ref_baseprobs[ref_pos] = base_probs[q_pos + map_res.q_st][base_idx]
-        except Exception:
-            #LOGGER.debug("error when extracting trace feature: {}-{}".format(map_res.read_id,
-            #                                                                 q_pos))
-            ref_baseprobs[ref_pos] = []
-            continue
-
-    # ref_mapinfo = (read_id, map_res.ref_seq, map_res.ctg, map_res.strand, map_res.r_st, map_res.r_en,
-    #                ref_signal_grp, ref_baseprobs)
-    ref_mapinfo = (read_id, map_res.ref_seq, ref_readlocs, ref_signal_grp, ref_baseprobs,
-                   [(len(map_res.ref_seq), map_res.ctg, map_res.strand, map_res.r_st, map_res.r_en), ])
-    features_list = _extract_features(ref_mapinfo, motif_seqs, chrom2len, positions, read_strand,
-                                      mod_loc, seq_len, signal_len, methy_label,
-                                      pad_only_r)
-    return 1, features_list
-
-def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
-    """
-    insertion: -1, deletion: -2, mismatch: -3
-    :param r_cigar_tuple: pysam.alignmentSegment.cigartuples
-    :param strand: 1/-1 for fwd/rev
-    :param seq_len: read alignment length
-    :return: query pos to ref pos
-    """
-    fill_invalid = -2
-    # get each base calls genomic position
-    q_to_r_poss = np.full(seq_len + 1, fill_invalid, dtype=np.int32)
-    # process cigar ops in read direction
-    curr_r_pos, curr_q_pos = 0, 0
-    cigar_ops = r_cigar_tuple if strand == 1 else r_cigar_tuple[::-1]
-    for op, op_len in cigar_ops:
-        if op == 1:
-            # inserted bases into ref
-            for q_pos in range(curr_q_pos, curr_q_pos + op_len):
-                q_to_r_poss[q_pos] = -1
-            curr_q_pos += op_len
-        elif op in (2, 3):
-            # deleted ref bases
-            curr_r_pos += op_len
-        elif op in (0, 7, 8):
-            # aligned bases
-            for op_offset in range(op_len):
-                q_to_r_poss[curr_q_pos + op_offset] = curr_r_pos + op_offset
-            curr_q_pos += op_len
-            curr_r_pos += op_len
-        elif op == 6:
-            # padding (shouldn't happen in mappy)
-            pass
-    q_to_r_poss[curr_q_pos] = curr_r_pos
-    if q_to_r_poss[-1] == fill_invalid:
-        raise ValueError(('Invalid cigar string encountered. Reference length: {}  Cigar ' +
-                          'implied reference length: {}').format(seq_len, curr_r_pos))
-    return q_to_r_poss
-
-def _get_q2t_mapinfo(q2t_loc, q_seq, t_seq):
-    assert len(q2t_loc) == len(q_seq) + 1
-    q2t_map = np.full(len(q2t_loc), 0, dtype=np.int32)
-
-    if q2t_loc[0] == -1:  # insertion 000/001
-        q2t_map[0] = 1
-    elif q_seq[0].upper() != t_seq[q2t_loc[0]].upper():  # mismatch 000/100
-        q2t_map[0] = 4
-
-    if len(q2t_loc) > 2:
-        for idx in range(1, len(q2t_loc)-1):
-            if q2t_loc[idx] == -1:  # insertion 000/001
-                q2t_map[idx] = 1
+    for loc_in_read in tsite_locs:
+        if num_bases <= loc_in_read < len(seq) - num_bases:
+            if strand == '-':
+                pos = ref_start + len(seq) - 1 - loc_in_read
             else:
-                if q_seq[idx].upper() != t_seq[q2t_loc[idx]].upper():  # mismatch 000/100
-                    q2t_map[idx] += 4
-                if q2t_loc[idx-1] != -1 and q2t_loc[idx] != q2t_loc[idx-1] + 1:  # deletion 000/010
-                    q2t_map[idx] += 2
-    return q2t_map
+                pos = ref_start + loc_in_read
+            k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
+            #k_seq=[base2code_dna[x] for x in k_mer]
+            k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
 
-def _process_read_map(pod5_record,bam_record, norm_method,
-                        mapq, identity, coverage_ratio,
-                        motif_seqs, chrom2len, positions,
-                        read_strand, mod_loc, seq_len, signal_len, methy_label,
-                        pad_only_r,
-                        readname,
-                        chroms,):
-    # input: f5_path
-    # output: features_list
-    # -1: read fast5 error, -2: align read error, -3: quality too low
-    success, readinfo = _get_read_signalinfo(pod5_record,bam_record, norm_method,
-                                             readname,
-                                             unmapped=False)
-    if success == 0:
-        #LOGGER.info("map fail")
-        return -1, None
+            signal_lens = [len(x) for x in k_signals]
+            # if sum(signal_lens) > MAX_LEGAL_SIGNAL_NUM:
+            #     continue
 
-    # base_probs: array of (read_len, 4)
-    read_id, baseseq, signal_group, base_probs, mapinfo = readinfo
-    if len(mapinfo) == 0:
-        return -2, None
-    failed_cnt = 0
-
-    combed_ref_seq = ""
-    combed_ref_signal_grp = []
-    combed_ref_baseprobs = []
-    combed_ref_readlocs = []
-    combed_cigartuples = []
-    seg_mapping = []
-    #ref_name,read_start,read_end,ref_start,ref_end,cigar_tuples,cigar_stats,reverse,combed_ref_seq=mapinfo
-    #combed_cigartuples = np.array(cigar_stats[0])
-    #if reverse:
-    #    seq_start = len(baseseq) - read_end
-    #    seq_end = len(baseseq) - read_start
-    #else:
-    #    seq_start = read_start
-    #    seq_end = read_end
-    #strand_code = -1 if reverse else 1
-    #r_to_q_poss = parse_cigar(cigar_tuples, strand_code, (seq_end - seq_start))
-    #print(mapinfo)
-    for map_idx in range(len(mapinfo)):
-        item_cigar, chrom_strands, frags= mapinfo[map_idx]
-        #print(cigartuple)
-        item_chrom, item_strand=chrom_strands
-        #print(item_strand)
-        #print(chrom_strands)
-        item_read_s, item_read_e, item_ref_s, item_ref_e=frags
-        #item_cigar, (item_chrom, item_strand), (item_read_s, item_read_e, item_ref_s, item_ref_e) = mapinfo[map_idx]
-        #print(item_cigar)
-        try:
-            cigartuple = _convert_cigarstring2tuple(item_cigar)
-        #print(cigartuple)
-        #break
-        # WARN: remove D(eltion, encoded as 2) at the end of the alignment?
-        
-            if map_idx == len(mapinfo) - 1:
-                if item_strand == "+" and cigartuple[-1][-1] == 2:
-                    oplen_tmp = cigartuple[-1][0]
-                    cigartuple = cigartuple[:-1]
-                    item_ref_e -= oplen_tmp
-                if item_strand == "-" and cigartuple[0][-1] == 2:
-                    oplen_tmp = cigartuple[0][0]
-                    cigartuple = cigartuple[1:]
-                    item_ref_s += oplen_tmp
-        except TypeError:
-            LOGGER.info("cigar parsing error: {} with strand: {}".format(read_id,item_strand))
-            failed_cnt += 1
-            continue    
-        
-        try:
-            if item_chrom == 'read':
-                assert item_strand == "+"
-                ref_seq = baseseq[item_ref_s:item_ref_e]
-                strand_code = 1
-                r_to_q_poss = parse_cigar(cigartuple, strand_code, len(ref_seq))
+            signal_means = [np.mean(x) for x in k_signals]
+            signal_stds = [np.std(x) for x in k_signals]
+            if seq_read.reference_name is None:
+                ref_name='.'
             else:
-                ref_seq = chroms[item_chrom][item_ref_s:item_ref_e]
-                if item_strand == "-":
-                    ref_seq = complement_seq(ref_seq)
-                strand_code = 0 if item_strand == "-" else 1
-                r_to_q_poss = parse_cigar(cigartuple, strand_code, len(ref_seq))
-        except KeyError:
-            LOGGER.debug("no chrom-{} in reference genome: {}".format(item_chrom, read_id))
-            failed_cnt += 1
-            continue
-        except ValueError:
-            LOGGER.debug("cigar parsing error: {}".format(read_id))
-            failed_cnt += 1
-            continue
-        
-
-        ref_signal_grp = [None, ] * len(ref_seq)
-        ref_baseprobs = [0., ] * len(ref_seq)
-        ref_readlocs = [0, ] * len(ref_seq)
-        for ref_pos, q_pos in enumerate(r_to_q_poss[:-1]):
-            # signal groups
-            ref_readlocs[ref_pos] = q_pos + item_read_s
-            ref_signal_grp[ref_pos] = signal_group[q_pos + item_read_s]
-            # trace
-            try:
-                base_idx = base2code_dna[ref_seq[ref_pos]]
-                ref_baseprobs[ref_pos] = base_probs[q_pos + item_read_s][base_idx]
-            except Exception:
-                #LOGGER.debug("error when extracting trace feature: {}-{}".format(read_id,
-                #                                                                 q_pos))
-                ref_baseprobs[ref_pos] = []
+                ref_name=seq_read.reference_name
+            #sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
+            if (positions is not None) and (key_sep.join([ref_name,str(pos), strand]) not in positions):
                 continue
-
-        combed_ref_seq += ref_seq
-        combed_ref_readlocs += ref_readlocs
-        combed_ref_signal_grp += ref_signal_grp
-        combed_ref_baseprobs += ref_baseprobs
-        combed_cigartuples += cigartuple
-        seg_mapping.append((len(ref_seq), item_chrom, strand_code, item_ref_s, item_ref_e))
-    if failed_cnt > 0:
-        #LOGGER.info("map fail")
-        return -3, None
-    try:
-        if _compute_pct_identity(combed_cigartuples) < identity:
-            LOGGER.info("identity too low: {}, identity: {}".format(read_id,
-                                                                     _compute_pct_identity(combed_cigartuples)))
-            return -3, None
-    except ZeroDivisionError:
-        raise ZeroDivisionError("{}, {}".format(read_id, combed_cigartuples))
-    del combed_cigartuples
-    ref_mapinfo = (read_id, combed_ref_seq, combed_ref_readlocs,
-                   combed_ref_signal_grp, combed_ref_baseprobs, seg_mapping)
-    features_list = _extract_features(ref_mapinfo, motif_seqs, chrom2len, positions, read_strand,
-                                      mod_loc, seq_len, signal_len, methy_label,
-                                      pad_only_r)
-    return 1, features_list
-
-def _process_read_nomap(pod5_record,bam_record, norm_method,
-                                 motif_seqs, chrom2len, positions, read_strand,
-                                 mod_loc, seq_len, signal_len, methy_label,
-                                 pad_only_r,
-                                 readname,):
-    # -1: read fast5 error, -2: align read error, -3: quality too low
-    success, readinfo = _get_read_signalinfo(pod5_record,bam_record, norm_method,
-                                             readname,
-                                             unmapped=True)
-    if success == 0:
-        #LOGGER.info("map fail")
-        return -1, None
-
-    # base_probs: array of (read_len, 4)
-    read_id, baseseq, signal_group, base_probs, mapinfo = readinfo
-    failed_cnt = 0
-
-    readlocs = range(len(baseseq))
-    read_info = read_id,baseseq,readlocs,signal_group
-    features_list = _extract_features_nomapping(read_info, motif_seqs, chrom2len, positions, 
-                                      mod_loc, seq_len, signal_len, methy_label,
-                                      pad_only_r)
-    return 1, features_list
-
-def _process_read(extract_conn,
-                  pod5_record,bam_record, norm_method,
-                  mapq, identity, coverage_ratio,
-                  motif_seqs, chrom2len, positions, read_strand,
-                  mod_loc, seq_len, signal_len, methy_label,
-                  pad_only_r,
-                  read_id,
-                  use_mapping,unmapped, chroms):
-    if use_mapping is False:
-        return _process_read_nomap(pod5_record,bam_record, norm_method,
-                                 motif_seqs, chrom2len, positions, read_strand,
-                                 mod_loc, seq_len, signal_len, methy_label,
-                                 pad_only_r,
-                                 read_id,)
-    if unmapped:
-        return _process_read_unmapped(extract_conn,
-                                 pod5_record,bam_record, norm_method,
-                                 mapq, identity, coverage_ratio,
-                                 motif_seqs, chrom2len, positions, read_strand,
-                                 mod_loc, seq_len, signal_len, methy_label,
-                                 pad_only_r,
-                                 read_id,)
-    else:
-        return _process_read_map(pod5_record,bam_record, norm_method,
-                                   mapq, identity, coverage_ratio,
-                                   motif_seqs, chrom2len, positions, read_strand,
-                                   mod_loc, seq_len, signal_len, methy_label,
-                                   pad_only_r,
-                                   read_id,chroms)
-
-
-def _process_reads(data_q, features_q, error_q, extract_conn,
-                   pod5_dr,bam_index, norm_method,
-                   mapq, identity, coverage_ratio,
-                   motif_seqs, chrom2len, positions, read_strand,
-                   mod_loc, seq_len, signal_len, methy_label,
-                   pad_only_r,
-                   f5_batch_num,
-                   use_mapping,unmapped, chroms,
-                   is_to_str=True, is_batchlize=False,):
-    assert not (is_to_str and is_batchlize)
-    LOGGER.info("extract_features process-{} starts".format(os.getpid()))
-    f5_num = 0  # number of reads
-    error2num = {-1: 0, -2: 0, -3: 0, 0: 0}  # (-1, -2, -3, 0)
-    cnt_fast5batch = 0
-    pod5_record=None
-    bam_record=None
-    while True:
-        if data_q.empty():
-            time.sleep(time_wait)
-        read_data = data_q.get()
-        if read_data == "kill":
-            data_q.put("kill")
-            break
-
-        features_list_batch = []
-        read_cnt = 0
-        for read_id in read_data:
-            pod5_record=pod5_dr.get_read(read_id)
-            #print(f"{read_id}")
-            #for pod5_record in pod5_dr.reads(selection=str(read_id)):#TMD,reads() method is garbage
-            #pod5_record=pod5_dr.reads(read_id)
-                #print(f"{read_id}")
-            for bam_record in bam_index.get_alignments(read_id):
-                read_cnt += 1
-                success, features_list =_process_read(extract_conn,
-                                                                pod5_record,bam_record, norm_method,
-                                                                mapq, identity, coverage_ratio,
-                                                                motif_seqs, chrom2len, positions, read_strand,
-                                                                mod_loc, seq_len, signal_len, methy_label,
-                                                                pad_only_r, read_id,
-                                                                use_mapping,unmapped, chroms)
-                if success <= 0:
-                    error2num[success] += 1
-                    #print(f'error with code {success}')
-                else:
-                    if is_to_str:
-                        features_list_batch += [_features_to_str(features) for features in features_list]
-                    else:
-                        features_list_batch += features_list
-
-        if not is_to_str and is_batchlize:  # if is_to_str, then ignore is_batchlize
-            features_list_batch = _batchlize_features_list(features_list_batch)
-        features_q.put(features_list_batch)
-        while features_q.qsize() > queue_size_border:
-            time.sleep(time_wait)
-        f5_num += read_cnt
-
-
-        cnt_fast5batch += 1
-        if cnt_fast5batch % 100 == 0:
-            LOGGER.info("extrac_features process-{}, {} fast5_batches "
-                        "proceed".format(os.getpid(), cnt_fast5batch))
-    error_q.put(error2num)
-    error_total = sum([error2num[error_code] for error_code in error2num.keys()])
-    LOGGER.info("extract_features process-{} finished, proceed {} reads, failed: {}".format(os.getpid(),
-                                                                                            f5_num,
-                                                                                            error_total))
-
-
-def start_extract_processes(data_q, features_q, error_q, nproc,
-                            pod5_dr,bam_index, norm_method,
-                            mapq, identity, coverage_ratio,
-                            motif_seqs, chrom2len, positions, read_strand,
-                            mod_loc, seq_len, signal_len, methy_label,
-                            pad_only_r, f5_batch_num,
-                            use_mapping,unmapped,chroms,
-                            is_to_str=True, is_batchlize=False):
-    random.seed(1234)
-    extract_ps, map_conns = [], []
-    for proc_idx in range(nproc):
-        if use_mapping and unmapped:
-            map_conn, extract_conn = mp.Pipe()
-            map_conns.append(map_conn)
-        else:
-            extract_conn = None
-        p = mp.Process(target=_process_reads,
-                       args=(data_q, features_q, error_q, extract_conn,
-                             pod5_dr,bam_index, norm_method,
-                             mapq, identity, coverage_ratio,
-                             motif_seqs, chrom2len, positions, read_strand,
-                             mod_loc, seq_len, signal_len, methy_label,
-                             pad_only_r,
-                             f5_batch_num,
-                             use_mapping,unmapped, chroms,
-                             is_to_str, is_batchlize),
-                       name="extracter_{:03d}".format(proc_idx))
-        p.daemon = True
-        p.start()
-        extract_ps.append(p)
-
-        if extract_conn is not None:
-            extract_conn.close()
-        del extract_conn
-    return extract_ps, map_conns
-
-
-def start_map_threads(map_conns, aligner):
-    time.sleep(1)
-    map_read_ts = []
-    for ti, map_conn in enumerate(map_conns):
-        map_read_ts.append(threading.Thread(
-            target=_map_read_to_ref_process, args=(aligner, map_conn),
-            daemon=True, name='aligner_{:03d}'.format(ti)))
-        map_read_ts[-1].start()
-    return map_read_ts
-# =================================================================================
-
-
-def _reads_processed_stats(error2num, len_reads):
-    error_total = sum([error2num[error_code] for error_code in error2num.keys()])
-    if len_reads == 0:
-        LOGGER.error("no read file fonud in --input_dir")
-        return
-    #if is_single:
-    #    LOGGER.info("summary:\n"
-    #                "  total reads: {}\n"
-    #                "  failed reads: {}({:.1f}%)\n"
-    #                "    error in reading reads: {}({:.1f}%)\n"
-    #                "    error in alignment: {}({:.1f}%)\n"
-    #                "    low quality: {}({:.1f}%)\n"
-    #                "    error in parsing cigar: {}({:.1f}%)\n".format(len_reads,
-    #                                                                   error_total,
-    #                                                                   error_total/float(len_reads) * 100,
-    #                                                                   error2num[-1],
-    #                                                                   error2num[-1]/float(len_reads) * 100,
-    #                                                                   error2num[-2],
-    #                                                                   error2num[-2]/float(len_reads) * 100,
-    #                                                                   error2num[-3],
-    #                                                                   error2num[-3]/float(len_reads) * 100,
-    #                                                                   error2num[0],
-    #                                                                   error2num[0]/float(len_reads) * 100))
-    #else:
-    LOGGER.info("summary:\n"
-                    "  total reads: {}\n"
-                    "  failed reads: {}\n".format(len_reads,
-                                                  error_total))
-
+            
+            features_list.append(_features_to_str((ref_name,str(pos) , strand, '.', seq_read.query_name, '.',k_mer, signal_means, signal_stds,signal_lens,
+                                    _get_signals_rect(k_signals, signals_len),methy_label)))
+    return features_list
+def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len,qsize_limit=4,time_wait=1):
+    chunk=[]
+    for filename in sig_dr:
+        with pod5.Reader(filename) as reader:
+            for read_record in reader.reads():
+                if feature_Q.qsize()>qsize_limit:
+                    time.sleep(time_wait)
+                read_name=str(read_record.read_id)
+                signal=read_record.signal
+                if signal is None:
+                    continue
+                try:
+                    for seq_read in seq_index.get_alignments(read_name):
+                        seq = seq_read.get_forward_sequence()
+                        if seq is None:
+                            continue
+                        data=(signal,seq_read)
+                        feature_lists=process_data(data,motif_seqs,positions,kmer_len,signals_len)
+                        #chunk.append(feature_lists)
+                        #if len(chunk)>=r_batch_size:
+                        #print(len(feature_lists[0]),flush=True)
+                        feature_Q.put(feature_lists)
+                        chunk=[]               
+                except KeyError:
+                    print('Read:%s not found in BAM file' %read_name, flush=True)
+                    continue
+    if len(chunk)>0:
+        feature_Q.put(chunk)
+        chunk=[]
 
 def extract_features(args):
     start = time.time()
@@ -1056,76 +190,62 @@ def extract_features(args):
         raise ValueError("--input_dir not set right!")
     if not os.path.isdir(input_dir):
         raise NotADirectoryError("--input_dir not a directory")
+    LOGGER.info("read position file if it is not None")
+    positions = None
+    if args.positions is not None:
+        positions = _read_position_file(args.positions)
     is_recursive = str2bool(args.recursively)
     is_dna = False if args.rna else True
+    motif_seqs = get_motif_seqs(args.motifs, is_dna)
     bam_index=bam_reader.ReadIndexedBam(args.bam)
-    pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
-
-    motif_seqs, chrom2len, data_q, len_reads, \
-        positions, contigs = _extract_preprocess(args.motifs, is_dna, ref_path,
-                                                 args.f5_batch_size, args.positions,args,bam_index,pod5_dr)
-
-    # read_strand has been deprecated
-    read_strand = _get_read_sequened_strand()
-
-    data_q.put("kill")
-    features_q = Queue()
+    pod5_dr=[]
+    for pod5_name in os.listdir(input_dir):
+        if pod5_name.endswith('.pod5'):
+            pod5_path = '/'.join([input_dir, pod5_name])
+            pod5_dr.append(pod5_path)
+    #pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
+    features_batch_q = Queue()
     error_q = Queue()
+    p_rfs=[]
 
-    if args.mapping and args.unmapped:
-        aligner = get_aligner(ref_path, args.best_n)
+    nproc = args.nproc-1
+    if nproc<len(pod5_dr):
+        data=split_list(pod5_dr, nproc)
+        for sig_data in data:
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,args.signal_len,
+                                                            args.r_batch_size),
+                          name="reader")
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+    else:
+        data=split_list(pod5_dr, len(pod5_dr))
+        for sig_data in data:
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,args.signal_len,
+                                                            args.r_batch_size),
+                          name="reader")
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+    #if nproc < 2:
+    #    nproc = 2
 
-    nproc = args.nproc
-    if nproc < 2:
-        nproc = 2
-    nproc_extr = nproc - 1
-
-
-    extract_ps, map_conns = start_extract_processes(data_q, features_q, error_q, nproc_extr,
-                                                    pod5_dr,bam_index,
-                                                    args.normalize_method,
-                                                    args.mapq, args.identity, args.coverage_ratio,
-                                                    motif_seqs, chrom2len, positions, read_strand,
-                                                    args.mod_loc, args.seq_len, args.signal_len, args.methy_label,
-                                                    args.pad_only_r, args.f5_batch_size,
-                                                    args.mapping,args.unmapped, contigs,
-                                                    True,False)
-
-    p_w = mp.Process(target=_write_featurestr, args=(args.write_path, features_q, args.w_batch_num,
+    p_w = mp.Process(target=_write_featurestr, args=(args.write_path, features_batch_q, args.w_batch_num,
                                                      str2bool(args.w_is_dir)),
                      name="writer")
     p_w.daemon = True
     p_w.start()
-
-    if args.mapping and args.unmapped:
-        map_read_ts = start_map_threads(map_conns, aligner)
-
     # finish processes
-    error2num = {-1: 0, -2: 0, -3: 0, 0: 0}  # (-1, -2, -3, 0)
-    while True:
-        running = any(p.is_alive() for p in extract_ps)
-        while not error_q.empty():
-            error2numtmp = error_q.get()
-            for ecode in error2numtmp.keys():
-                error2num[ecode] += error2numtmp[ecode]
-        if not running:
-            break
-
-    for p in extract_ps:
-        p.join()
-    if args.mapping and args.unmapped:
-        for map_t in map_read_ts:
-            map_t.join()
-    features_q.put("kill")
+    for pb in p_rfs:
+        pb.join()
+    features_batch_q.put("kill")
 
     p_w.join()
 
-    _reads_processed_stats(error2num, len_reads)
     LOGGER.info("[extract] finished, cost {:.1f}s".format(time.time()-start))
 
-
 def main():
-    extraction_parser = argparse.ArgumentParser("extract features from guppy FAST5s for "
+    extraction_parser = argparse.ArgumentParser("extract features from pod5 for "
                                                 "training or testing."
                                                 "\nIt is suggested that running this module 1 flowcell a time, "
                                                 "or a group of flowcells a time, "
@@ -1183,7 +303,7 @@ def main():
                                     " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
                                     "need to be set. --positions is used to narrow down the range of the trageted "
                                     "motif locs. default None")
-    ep_extraction.add_argument("--f5_batch_size", action="store", type=int, default=50,
+    ep_extraction.add_argument("--r_batch_size", action="store", type=int, default=50,
                                required=False,
                                help="number of files to be processed by each process one time, default 50")
     ep_extraction.add_argument("--pad_only_r", action="store_true", default=False,
@@ -1196,8 +316,6 @@ def main():
     ep_mapping = extraction_parser.add_argument_group("MAPPING")
     ep_mapping.add_argument("--mapping", action="store_true", default=False, required=False,
                             help='use MAPPING to get alignment, default false')
-    ep_mapping.add_argument("--unmapped", action="store_true", default=True, required=False,
-                            help='extract or mapping to get alignment, default True, means via mapping')
     ep_mapping.add_argument("--mapq", type=int, default=10, required=False,
                             help="MAPping Quality cutoff for selecting alignment items, default 10")
     ep_mapping.add_argument("--identity", type=float, default=0.75, required=False,
@@ -1226,7 +344,5 @@ def main():
     display_args(extraction_args)
 
     extract_features(extraction_args)
-
-
 if __name__ == '__main__':
     sys.exit(main())
