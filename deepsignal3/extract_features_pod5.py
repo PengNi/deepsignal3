@@ -23,27 +23,17 @@ from statsmodels import robust
 
 from .utils.process_utils import str2bool
 from .utils.process_utils import display_args
-from .utils.process_utils import get_fast5s
+from .utils.process_utils import get_files
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
-from .utils.process_utils import complement_seq
-
-from .utils.ref_reader import get_contig2len
-from .utils.ref_reader import get_contig2len_n_seq
 
 
-from .utils.process_utils import base2code_dna
 from .utils import bam_reader
 
-from .utils.process_utils import CIGAR_REGEX
-from .utils.process_utils import CIGAR2CODE
 
-import mappy
-import threading
 from collections import namedtuple
 from .utils.process_utils import get_logger
 import pod5
-import pysam
 from .extract_features import _group_signals_by_movetable_v2
 from .extract_features import _get_signals_rect
 from .extract_features import _write_featurestr
@@ -198,11 +188,8 @@ def extract_features(args):
     is_dna = False if args.rna else True
     motif_seqs = get_motif_seqs(args.motifs, is_dna)
     bam_index=bam_reader.ReadIndexedBam(args.bam)
-    pod5_dr=[]
-    for pod5_name in os.listdir(input_dir):
-        if pod5_name.endswith('.pod5'):
-            pod5_path = '/'.join([input_dir, pod5_name])
-            pod5_dr.append(pod5_path)
+    pod5_dr=get_files(input_dir,is_recursive,'.pod5')
+    
     #pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
     features_batch_q = Queue()
     error_q = Queue()
