@@ -23,7 +23,7 @@ from statsmodels import robust
 
 from .utils.process_utils import str2bool
 from .utils.process_utils import display_args
-from .utils.process_utils import get_fast5s
+from .utils.process_utils import get_files
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
 from .utils.process_utils import complement_seq
@@ -497,7 +497,7 @@ def check_basecallgroup(fast5_fn, basecall_group, basecall_subgroup, is_single=F
 def _extract_preprocess(fast5_dir, is_recursive, motifs, is_dna, reference_path, f5_batch_num,
                         position_file, args):
 
-    fast5_files = get_fast5s(fast5_dir, is_recursive)
+    fast5_files = get_files(fast5_dir, is_recursive)
     if args.single:
         LOGGER.info("{} fast5s/reads in total".format(len(fast5_files)))
     else:
