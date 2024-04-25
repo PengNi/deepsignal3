@@ -54,6 +54,7 @@ from .extract_features import _group_signals_by_movetable_v2
 from .extract_features import _get_signals_rect
 
 from .utils.process_utils import get_logger
+from .utils.process_utils import split_list
 
 from .utils import bam_reader
 import pod5
@@ -416,11 +417,7 @@ def _call_mods_from_fast5s_cpu2(ref_path, motif_seqs, chrom2len, fast5s_q, len_f
 
     _reads_processed_stats(error2num, len_fast5s, args.single)
 
-def split_list(data, num_chunks):
-    
-    avg_chunk_size = len(data) // num_chunks
-    chunks = [data[i:i+avg_chunk_size] for i in range(0, len(data), avg_chunk_size)]
-    return chunks
+
 
 def _call_mods_from_pod5_gpu(pod5_dr,bam_index,success_file,model_path,motif_seqs,args):
     nproc = args.nproc   
@@ -501,7 +498,6 @@ def process_data(data,motif_seqs,kmer_len,signals_len,methyloc=0,methy_label=1):
     if kmer_len % 2 == 0:
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
-    features_list = []
     signal,seq_read=data
     read_dict=dict(seq_read.tags)
     mv_table=np.asarray(read_dict['mv'][1:])
@@ -761,7 +757,7 @@ def main():
     p_output.add_argument("--result_file", "-o", action="store", type=str, required=True,
                           help="the file path to save the predicted result")
 
-    p_f5 = parser.add_argument_group("FAST5_EXTRACTION")
+    p_f5 = parser.add_argument_group("EXTRACTION")
     p_f5.add_argument("--single", action="store_true", default=False, required=False,
                       help='the fast5 files are in single-read format')
     p_f5.add_argument("--recursively", "-r", action="store", type=str, required=False,
