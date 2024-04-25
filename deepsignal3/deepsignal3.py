@@ -22,9 +22,24 @@ def main_extraction(args):
 
 def main_call_mods(args):
     from .call_modifications import call_mods
+    #from .call_modifications_transfer import call_mods as call_mods_transfer
+    #from .call_modifications_domain import call_mods as call_mods_domain
+    #from .call_modifications_cg import call_mods as call_mods_cg
+    #from .call_modifications_cg_combine import call_mods as call_mods_cg_combine
+    #from .call_modifications_freq import call_mods as call_mods_freq
 
     display_args(args)
-    call_mods(args)
+    if args.transfer:
+        print('transfer')
+        #call_mods_transfer(args)
+    elif args.domain:
+        print('domain')
+        #call_mods_domain(args)
+    elif args.freq:
+        print('freq')
+        #call_mods_freq(args)
+    else:    
+        call_mods(args)
 
 
 def main_call_freq(args):
@@ -34,24 +49,34 @@ def main_call_freq(args):
 
 
 def main_train(args):
-    from .train import train
+    from .train import train,train_transfer,train_domain,train_fusion,train_cnn,train_cg,train_combine,trainFreq,trainFreq_mp
 
     display_args(args)
-    train(args)
+    if args.transfer:
+        print('transfer')
+        train_transfer(args)
+    elif args.domain:
+        print('domain')
+        train_domain(args)
+    elif args.freq:
+        print('freq')
+        trainFreq_mp(args)
+    else:
+        train(args)
 
 
-# def main_denoise(args):
-#     from .denoise import denoise
-#     import time
-#
-#     print("[main] start..")
-#     total_start = time.time()
-#
-#     display_args(args)
-#     denoise(args)
-#
-#     endtime = time.time()
-#     print("[main] costs {} seconds".format(endtime - total_start))
+def main_denoise(args):
+    from .denoise import denoise
+    import time
+
+    print("[main] start..")
+    total_start = time.time()
+
+    display_args(args)
+    denoise(args)
+
+    endtime = time.time()
+    print("[main] costs {} seconds".format(endtime - total_start))
 
 
 def main():
@@ -84,18 +109,18 @@ def main():
                                                                "if the whole data is extremely large.")
     sub_train = subparsers.add_parser("train", description="train a model, need two independent datasets for training "
                                                            "and validating")
-    # sub_denoise = subparsers.add_parser("denoise", description="denoise training samples by deep-learning, "
-    #                                                            "filter false positive samples (and "
-    #                                                            "false negative samples).")
+    sub_denoise = subparsers.add_parser("denoise", description="denoise training samples by deep-learning, "
+                                                                "filter false positive samples (and "
+                                                                "false negative samples).")
 
     # sub_extract ============================================================================
     se_input = sub_extract.add_argument_group("INPUT")
     se_input.add_argument("--input_dir", "-i", action="store", type=str,
                           required=True,
-                          help="the directory of fast5 files")
+                          help="the directory of fast5/pod5 files")
     se_input.add_argument("--recursively", "-r", action="store", type=str, required=False,
                           default='yes',
-                          help='is to find fast5 files from input_dir recursively. '
+                          help='is to find fast5/pod5 files from input_dir recursively. '
                                'default true, t, yes, 1')
     se_input.add_argument("--single", action="store_true", default=False, required=False,
                           help='the fast5 files are in single-read format')
@@ -103,7 +128,7 @@ def main():
                           type=str, required=False,default=None,
                           help="the reference file to be used, usually is a .fa file")
     se_input.add_argument("--rna", action="store_true", default=False, required=False,
-                          help='the fast5 files are from RNA samples. if is rna, the signals are reversed. '
+                          help='the fast5/pod5 files are from RNA samples. if is rna, the signals are reversed. '
                                'NOTE: Currently no use, waiting for further extentsion')
     se_input.add_argument('--bam', type=str, 
                         help='the bam filepath')
@@ -167,8 +192,6 @@ def main():
     se_mapping = sub_extract.add_argument_group("MAPPING")
     se_mapping.add_argument("--mapping", action="store_true", default=False, required=False,
                             help='use MAPPING to get alignment, default false')
-    se_mapping.add_argument("--unmapped", action="store_true", default=True, required=False,
-                            help='extract or mapping to get alignment, default True, means via mapping')
     se_mapping.add_argument("--mapq", type=int, default=10, required=False,
                             help="MAPping Quality cutoff for selecting alignment items, default 10")
     se_mapping.add_argument("--identity", type=float, default=0.75, required=False,
@@ -205,6 +228,8 @@ def main():
     sc_input.add_argument("--r_batch_size", action="store", type=int, default=50,
                           required=False,
                           help="number of files to be processed by each process one time, default 50")
+    sc_input.add_argument('--bam', type=str, 
+                        help='the bam filepath')
 
     sc_call = sub_call_mods.add_argument_group("CALL")
     sc_call.add_argument("--model_path", "-m", action="store", type=str, required=True,
@@ -252,14 +277,14 @@ def main():
     sc_output.add_argument("--result_file", "-o", action="store", type=str, required=True,
                            help="the file path to save the predicted result")
 
-    sc_f5 = sub_call_mods.add_argument_group("FAST5_EXTRACTION")
+    sc_f5 = sub_call_mods.add_argument_group("EXTRACTION")
     sc_f5.add_argument("--single", action="store_true", default=False, required=False,
                        help='the fast5 files are in single-read format')
     sc_f5.add_argument("--recursively", "-r", action="store", type=str, required=False,
-                       default='yes', help='is to find fast5 files from fast5 dir recursively. '
+                       default='yes', help='is to find fast5/pod5 files from fast5 dir recursively. '
                                            'default true, t, yes, 1')
     sc_f5.add_argument("--rna", action="store_true", default=False, required=False,
-                       help='the fast5 files are from RNA samples. if is rna, the signals are reversed. '
+                       help='the fast5/pod5 files are from RNA samples. if is rna, the signals are reversed. '
                             'NOTE: Currently no use, waiting for further extentsion')
     sc_f5.add_argument("--basecall_group", action="store", type=str, required=False,
                        default=None,
@@ -391,69 +416,72 @@ def main():
     #                        help='random seed')
     # else
     st_train.add_argument('--tmpdir', type=str, default="/tmp", required=False)
+    st_train.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
+    st_train.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
+    st_train.add_argument('--freq', action='store_true', default=False, help="weather use freq attribute")
 
     sub_train.set_defaults(func=main_train)
 
     # # sub_denoise =====================================================================================
-    # sd_input = sub_denoise.add_argument_group("INPUT")
-    # sd_input.add_argument('--train_file', type=str, required=True, help="file containing (combined positive and "
-    #                                                                     "negative) samples for training. better been "
-    #                                                                     "balanced in kmer level.")
+    sd_input = sub_denoise.add_argument_group("INPUT")
+    sd_input.add_argument('--train_file', type=str, required=True, help="file containing (combined positive and "
+                                                                        "negative) samples for training. better been "
+                                                                        "balanced in kmer level.")
     #
-    # sd_train = sub_denoise.add_argument_group("TRAIN")
-    # sd_train.add_argument('--is_filter_fn', type=str, default="no", required=False,
-    #                       help="is filter false negative samples, , 'yes' or 'no', default no")
+    sd_train = sub_denoise.add_argument_group("TRAIN")
+    sd_train.add_argument('--is_filter_fn', type=str, default="no", required=False,
+                          help="is filter false negative samples, , 'yes' or 'no', default no")
     # # model input
-    # sd_train.add_argument('--model_type', type=str, default="signal_bilstm",
-    #                       choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
-    #                       required=False,
-    #                       help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-    #                            "'both_bilstm' means to use both seq and signal bilstm, default: signal_bilstm")
-    # sd_train.add_argument('--seq_len', type=int, default=13, required=False,
-    #                       help="len of kmer. default 13")
-    # sd_train.add_argument('--signal_len', type=int, default=15, required=False,
-    #                       help="the number of signals of one base to be used in deepsignal_plant, default 15")
+    sd_train.add_argument('--model_type', type=str, default="signal_bilstm",
+                          choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+                          required=False,
+                          help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
+                                "'both_bilstm' means to use both seq and signal bilstm, default: signal_bilstm")
+    sd_train.add_argument('--seq_len', type=int, default=21, required=False,
+                          help="len of kmer. default 21")
+    sd_train.add_argument('--signal_len', type=int, default=16, required=False,
+                          help="the number of signals of one base to be used in deepsignal_plant, default 16")
     # # model param
-    # sd_train.add_argument('--layernum1', type=int, default=3,
-    #                       required=False, help="lstm layer num for combined feature, default 3")
-    # sd_train.add_argument('--layernum2', type=int, default=1,
-    #                       required=False, help="lstm layer num for seq feature (and for signal feature too), default 1")
-    # sd_train.add_argument('--class_num', type=int, default=2, required=False)
-    # sd_train.add_argument('--dropout_rate', type=float, default=0.5, required=False)
-    # sd_train.add_argument('--n_vocab', type=int, default=16, required=False,
-    #                       help="base_seq vocab_size (15 base kinds from iupac)")
-    # sd_train.add_argument('--n_embed', type=int, default=4, required=False,
-    #                       help="base_seq embedding_size")
-    # sd_train.add_argument('--is_base', type=str, default="yes", required=False,
-    #                       help="is using base features in seq model, default yes")
-    # sd_train.add_argument('--is_signallen', type=str, default="yes", required=False,
-    #                       help="is using signal length feature of each base in seq model, default yes")
-    # sd_train.add_argument('--is_trace', type=str, default="no", required=False,
-    #                       help="is using trace (base prob) feature of each base in seq model, default yes")
+    sd_train.add_argument('--layernum1', type=int, default=3,
+                          required=False, help="lstm layer num for combined feature, default 3")
+    sd_train.add_argument('--layernum2', type=int, default=1,
+                          required=False, help="lstm layer num for seq feature (and for signal feature too), default 1")
+    sd_train.add_argument('--class_num', type=int, default=2, required=False)
+    sd_train.add_argument('--dropout_rate', type=float, default=0.5, required=False)
+    sd_train.add_argument('--n_vocab', type=int, default=16, required=False,
+                          help="base_seq vocab_size (15 base kinds from iupac)")
+    sd_train.add_argument('--n_embed', type=int, default=4, required=False,
+                          help="base_seq embedding_size")
+    sd_train.add_argument('--is_base', type=str, default="yes", required=False,
+                          help="is using base features in seq model, default yes")
+    sd_train.add_argument('--is_signallen', type=str, default="yes", required=False,
+                          help="is using signal length feature of each base in seq model, default yes")
+    sd_train.add_argument('--is_trace', type=str, default="no", required=False,
+                          help="is using trace (base prob) feature of each base in seq model, default yes")
     # # BiLSTM model param
-    # sd_train.add_argument('--hid_rnn', type=int, default=256, required=False,
-    #                       help="BiLSTM hidden_size for combined feature")
+    sd_train.add_argument('--hid_rnn', type=int, default=256, required=False,
+                          help="BiLSTM hidden_size for combined feature")
     # # model training
-    # sd_train.add_argument('--pos_weight', type=float, default=1.0, required=False)
-    # sd_train.add_argument('--batch_size', type=int, default=512, required=False)
-    # sd_train.add_argument('--lr', type=float, default=0.001, required=False)
-    # sd_train.add_argument('--epoch_num', type=int, default=3, required=False)
-    # sd_train.add_argument('--step_interval', type=int, default=100, required=False)
+    sd_train.add_argument('--pos_weight', type=float, default=1.0, required=False)
+    sd_train.add_argument('--batch_size', type=int, default=512, required=False)
+    sd_train.add_argument('--lr', type=float, default=0.001, required=False)
+    sd_train.add_argument('--epoch_num', type=int, default=3, required=False)
+    sd_train.add_argument('--step_interval', type=int, default=100, required=False)
     #
-    # sd_denoise = sub_denoise.add_argument_group("DENOISE")
-    # sd_denoise.add_argument('--iterations', type=int, default=10, required=False)
-    # sd_denoise.add_argument('--rounds', type=int, default=3, required=False)
-    # sd_denoise.add_argument("--score_cf", type=float, default=0.5,
-    #                         required=False,
-    #                         help="score cutoff to keep high quality (which prob>=score_cf) positive samples. "
-    #                              "usually <= 0.5, default 0.5")
-    # sd_denoise.add_argument("--kept_ratio", type=float, default=0.99,
-    #                         required=False,
-    #                         help="kept ratio of samples, to end denoise process")
-    # sd_denoise.add_argument("--fst_iter_prob", action="store_true", default=False,
-    #                         help="if output probs of samples after 1st iteration")
+    sd_denoise = sub_denoise.add_argument_group("DENOISE")
+    sd_denoise.add_argument('--iterations', type=int, default=10, required=False)
+    sd_denoise.add_argument('--rounds', type=int, default=3, required=False)
+    sd_denoise.add_argument("--score_cf", type=float, default=0.5,
+                            required=False,
+                            help="score cutoff to keep high quality (which prob>=score_cf) positive samples. "
+                                 "usually <= 0.5, default 0.5")
+    sd_denoise.add_argument("--kept_ratio", type=float, default=0.99,
+                            required=False,
+                            help="kept ratio of samples, to end denoise process")
+    sd_denoise.add_argument("--fst_iter_prob", action="store_true", default=False,
+                            help="if output probs of samples after 1st iteration")
     #
-    # sub_denoise.set_defaults(func=main_denoise)
+    sub_denoise.set_defaults(func=main_denoise)
 
     # sub_call_freq =====================================================================================
     scf_input = sub_call_freq.add_argument_group("INPUT")
@@ -478,8 +506,10 @@ def main():
                               'means use all calls. range [0, 1], default 0.5.')
 
     sub_call_freq.set_defaults(func=main_call_freq)
-
-    parser.add_argument('--pod5', action='store_true', default=False, help="weather use domain attribute")
+    parser.add_argument('--transfer', action='store_true', default=False, help="weather use transfer learning")
+    parser.add_argument('--domain', action='store_true', default=False, help="weather use domain attribute")
+    parser.add_argument('--freq', action='store_true', default=False, help="weather use freq attribute")
+    parser.add_argument('--pod5', action='store_true', default=False, help="input pod5 format")
 
 
     args = parser.parse_args()
