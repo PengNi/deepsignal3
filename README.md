@@ -235,4 +235,4 @@ export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/lo
 ## Todo
 
 - [ ] support data input format slow5 and blow5
-- [ ] support data input format bam
+- [ ] support data output format bam
