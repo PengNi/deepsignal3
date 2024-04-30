@@ -72,7 +72,7 @@ Example data, including training data and test data, can be downloaded from ([go
 
 ## Quick start
 
-To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG:
+To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
 
 ```bash
 # 1. dorado basecall using GPU
@@ -217,6 +217,22 @@ A new model can be trained as follows:
 # please use deepsignal3 train -h/--help for more details
 deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/file --model_dir /dir/to/save/the/new/model
 ```
+
+## Result
+
+The following table shows the results of HG002 is public available. The ground truth was obtained from WGBS.
+
+|   method   |    bsnum    |   smrtnum   |  internum   | pearson | rsquare | spearman |  RMSE  |    mean_covarge    |
+| :--------: | :---------: | :---------: | :---------: | :-----: | :-----: | :------: | :----: | :----------------: |
+| deepsignal | 57232553.00 | 27920150.00 | 26925016.00 | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607397689597065 |
+|   dorado   | 57232553.00 | 28341019.00 | 26137583.00 | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.218801980792145  |
+
+repeat five times to randomly select 10w positive samples and 10w negative samples for testing.
+
+|   method   |   TP    |   FN   |   TN    |   FP   | accuracy | recall | specificity | precision |
+| :--------: | :-----: | :----: | :-----: | :----: | :------: | :----: | :---------: | :-------: |
+| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.976   | 0.9709 |    0.981    |  0.9808   |
+|   dorado   | 93991.4 | 6008.6 | 99265.8 | 734.2  |  0.9663  | 0.9399 |   0.9927    |  0.9922   |
 
 ## Appendix
 
