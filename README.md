@@ -112,7 +112,7 @@ dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cuda:0 --emit-mov
 dorado  basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --device cpu --emit-moves  pod5/ --reference reference.fa  > example.bam
 ```
 
-If raw file is fast5, before run deepsignal, the raw reads should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)).
+If the raw reads is in FAST5 format, before running deepsignal, the raw reads should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)).
 
 For the example data:
 
@@ -222,14 +222,14 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([xxx]()). The ground truth was obtained from WGBS.
+The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The following table shows the correlations with resutls of WGBS:
 
 |   method   | pearson | rsquare | spearman |  RMSE  |    mean_coverage    |
 | :--------: | :-----: | :-----: | :------: | :----: | :----------------: |
 | deepsignal | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607 |
 |   dorado   | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.2188  |
 
-repeat five times to randomly select 100k positive samples and 100k negative samples for testing.
+The following table shows the read-level performance：
 
 |   method   |   TP    |   FN   |   TN    |   FP   | accuracy | recall | specificity | precision |
 | :--------: | :-----: | :----: | :-----: | :----: | :------: | :----: | :---------: | :-------: |

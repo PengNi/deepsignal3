@@ -296,6 +296,7 @@ def main():
                                                 "\nIt is suggested that running this module 1 flowcell a time, "
                                                 "or a group of flowcells a time, "
                                                 "if the whole data is extremely large.")
+    
     ep_input = extraction_parser.add_argument_group("INPUT")
     ep_input.add_argument("--input_dir", "-i", action="store", type=str,
                           required=True,
@@ -312,9 +313,8 @@ def main():
                                'NOTE: Currently no use, waiting for further extentsion')
     ep_input.add_argument('--bam', type=str, 
                         help='the bam filepath')
-    ep_extraction = extraction_parser.add_argument_group("EXTRACTION")
     
-
+    ep_extraction = extraction_parser.add_argument_group("EXTRACTION")
     ep_extraction.add_argument("--normalize_method", action="store", type=str, choices=["mad", "zscore"],
                                default="mad", required=False,
                                help="the way for normalizing signals in read level. "
@@ -357,8 +357,6 @@ def main():
                                "when the number of signals is less than --signal_len. "
                                "default False (pad in two sides).")
 
-    ep_mape = extraction_parser.add_argument_group("MAPe")
-
     ep_mapping = extraction_parser.add_argument_group("MAPPING")
     ep_mapping.add_argument("--mapping", action="store_true", default=False, required=False,
                             help='use MAPPING to get alignment, default false')
@@ -388,7 +386,7 @@ def main():
 
     extraction_args = extraction_parser.parse_args()
     display_args(extraction_args)
-
     extract_features(extraction_args)
+
 if __name__ == '__main__':
     sys.exit(main())
