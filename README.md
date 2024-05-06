@@ -72,8 +72,9 @@ Example data, including training data and test data, can be downloaded from ([go
 
 ## Quick start
 
-To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
+To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
 
+Demo commands of using Dorado and deepsignal3 to call 5mC from POD5 files:
 ```bash
 # 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
@@ -82,6 +83,7 @@ CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam dem
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 ```
 
+Demo commands of using Guppy and deepsignal3 to call 5mC from FAST5 files:
 ```bash
 # Higher versions of Guppy no longer support the output format fast5
 # Download and unzip the example data and pre-trained models.
@@ -220,18 +222,18 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of HG002 is public available. The ground truth was obtained from WGBS.
+The following table shows the results of publicly avaiable HG002 (R10.4.1, ~10x?) data from [xxx](). The ground truth was obtained from WGBS.
 
 |   method   |    bsnum    |   smrtnum   |  internum   | pearson | rsquare | spearman |  RMSE  |    mean_covarge    |
 | :--------: | :---------: | :---------: | :---------: | :-----: | :-----: | :------: | :----: | :----------------: |
-| deepsignal | 57232553.00 | 27920150.00 | 26925016.00 | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607397689597065 |
-|   dorado   | 57232553.00 | 28341019.00 | 26137583.00 | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.218801980792145  |
+| deepsignal | 57232553 | 27920150 | 26925016 | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607 |
+|   dorado   | 57232553 | 28341019 | 26137583 | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.2188  |
 
-repeat five times to randomly select 10w positive samples and 10w negative samples for testing.
+repeat five times to randomly select 100k positive samples and 100k negative samples for testing.
 
 |   method   |   TP    |   FN   |   TN    |   FP   | accuracy | recall | specificity | precision |
 | :--------: | :-----: | :----: | :-----: | :----: | :------: | :----: | :---------: | :-------: |
-| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.976   | 0.9709 |    0.981    |  0.9808   |
+| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.9760   | 0.9709 |    0.9810    |  0.9808   |
 |   dorado   | 93991.4 | 6008.6 | 99265.8 | 734.2  |  0.9663  | 0.9399 |   0.9927    |  0.9922   |
 
 ## Appendix
