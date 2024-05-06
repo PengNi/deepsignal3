@@ -222,7 +222,7 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of publicly avaiable HG002 (R10.4.1) data from [xxx](). The ground truth was obtained from WGBS.
+The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([xxx]()). The ground truth was obtained from WGBS.
 
 |   method   | pearson | rsquare | spearman |  RMSE  |    mean_coverage    |
 | :--------: | :-----: | :-----: | :------: | :----: | :----------------: |
