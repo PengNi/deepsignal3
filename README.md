@@ -15,7 +15,7 @@ deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https:/
 
 - Prerequisites:\
    [Python3.\*](https://www.python.org/) \
-   [dorado](https://github.com/nanoporetech/dorado)\
+   [Dorado](https://github.com/nanoporetech/dorado)\
    [Guppy](https://nanoporetech.com/community)
 - Dependencies: \
    [numpy](http://www.numpy.org/) \
@@ -101,7 +101,7 @@ deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.
 
 #### 1. Basecall
 
-If raw file is pod5, before run deepsignal, the raw reads should be basecalled ([dorado](https://github.com/nanoporetech/dorado)).
+If raw file is pod5, before run deepsignal, the raw reads should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)).
 
 For the example data:
 
@@ -222,9 +222,9 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of publicly avaiable HG002 (R10.4.1, ~10x?) data from [xxx](). The ground truth was obtained from WGBS.
+The following table shows the results of publicly avaiable HG002 (R10.4.1) data from [xxx](). The ground truth was obtained from WGBS.
 
-|   method   |    bsnum    |   smrtnum   |  internum   | pearson | rsquare | spearman |  RMSE  |    mean_covarge    |
+|   method   |    bsnum    |   smrtnum   |  internum   | pearson | rsquare | spearman |  RMSE  |    mean_coverage    |
 | :--------: | :---------: | :---------: | :---------: | :-----: | :-----: | :------: | :----: | :----------------: |
 | deepsignal | 57232553 | 27920150 | 26925016 | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607 |
 |   dorado   | 57232553 | 28341019 | 26137583 | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.2188  |
