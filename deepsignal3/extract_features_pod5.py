@@ -27,9 +27,7 @@ from .utils.process_utils import get_files
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
 
-
 from .utils import bam_reader
-
 
 from collections import namedtuple
 from .utils.process_utils import get_logger
@@ -50,6 +48,7 @@ key_sep = "||"
 MAP_RES = namedtuple('MAP_RES', (
     'read_id', 'q_seq', 'ref_seq', 'ctg', 'strand', 'r_st', 'r_en',
     'q_st', 'q_en', 'cigar', 'mapq'))
+
 
 def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
     """
@@ -89,6 +88,7 @@ def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
                           'implied reference length: {}').format(seq_len, curr_r_pos))
     return q_to_r_poss
 
+
 ################utils###################
 def _read_position_file(position_file):
     postions = set()
@@ -97,6 +97,7 @@ def _read_position_file(position_file):
             words = line.strip().split("\t")
             postions.add(key_sep.join(words[:3]))
     return postions
+
 
 def _features_to_str(features):
     """
@@ -114,6 +115,7 @@ def _features_to_str(features):
 
     return "\t".join([chrom, str(pos), alignstrand, str(loc_in_ref), readname, str(read_loc), k_mer, means_text,
                       stds_text, signal_len_text, k_signals_text, str(methy_label)])
+
 
 def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy_label=1):
     if kmer_len % 2 == 0:
@@ -192,6 +194,8 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
             features_list.append(_features_to_str((ref_name,str(ref_pos) , strand, '.', seq_read.query_name, '.',k_mer, signal_means, signal_stds,signal_lens,
                                     _get_signals_rect(k_signals, signals_len),methy_label)))
     return features_list
+
+
 def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len,qsize_limit=4,time_wait=1):
     chunk=[]
     for filename in sig_dr:
@@ -221,6 +225,7 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,sig
     if len(chunk)>0:
         feature_Q.put(chunk)
         chunk=[]
+
 
 def extract_features(args):
     start = time.time()
@@ -289,6 +294,7 @@ def extract_features(args):
     p_w.join()
 
     LOGGER.info("[extract] finished, cost {:.1f}s".format(time.time()-start))
+
 
 def main():
     extraction_parser = argparse.ArgumentParser("extract features from pod5 for "

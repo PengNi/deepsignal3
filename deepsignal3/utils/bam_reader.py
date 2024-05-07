@@ -4,10 +4,6 @@ from functools import cached_property
 from dataclasses import dataclass
 
 import numpy as np
-from statsmodels import robust
-
-
-
 
 
 def get_parent_id(bam_read):
@@ -17,6 +13,8 @@ def get_parent_id(bam_read):
     except KeyError:
         # else this is the parent read so return query_name
         return bam_read.query_name
+
+
 @dataclass        
 class ReadIndexedBam:
     bam_path: str
@@ -72,7 +70,6 @@ class ReadIndexedBam:
         self._bam_idx = dict(self._bam_idx)
         self.num_reads = len(self._bam_idx)
     
-
     def get_alignments(self, read_id):#多重序列比对，一条read可能map到多个位置
         if self._bam_idx is None:
             None
@@ -116,7 +113,8 @@ class ReadIndexedBam:
         if self._iter is None:
             self._iter = iter(self.bam_fh)
         return next(self._iter)
-    
+
+
 def get_read_ids(bam_idx, pod5_dr, num_reads=None, return_num_bam_reads=False):
     """Get overlapping read ids from bam index and pod5 file
 
@@ -147,6 +145,7 @@ def get_read_ids(bam_idx, pod5_dr, num_reads=None, return_num_bam_reads=False):
     else:
         num_reads = min(num_reads, num_both_read_ids)
     return both_read_ids, num_reads
+
 
 class Read:
     def __init__(self, pod5_record,bam_record,read_id):#pysam.AlignedSegment
