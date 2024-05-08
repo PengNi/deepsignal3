@@ -9,6 +9,7 @@ import gc
 import math
 import logging
 import re
+from statsmodels import robust
 
 basepairs = {
     "A": "T",
@@ -212,6 +213,20 @@ def complement_seq(base_seq, seq_type="DNA"):
     except Exception:
         print("something wrong in the dna/rna sequence.")
     return comseq
+
+
+def normalize_signals(signals, normalize_method="mad"):
+    if normalize_method == "zscore":
+        sshift, sscale = np.mean(signals), float(np.std(signals))
+    elif normalize_method == "mad":
+        sshift, sscale = np.median(signals), float(robust.mad(signals))
+    else:
+        raise ValueError("")
+    if sscale == 0.0:
+        norm_signals = signals
+    else:
+        norm_signals = (signals - sshift) / sscale
+    return np.around(norm_signals, decimals=6)
 
 
 # def get_refloc_of_methysite_in_motif(seqstr, motif='CG', methyloc_in_motif=0):

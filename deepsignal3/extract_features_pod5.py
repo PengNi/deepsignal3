@@ -3,6 +3,7 @@ output format:
 chrom, pos, alignstrand, pos_in_strand, readname, read_loc, k_mer, signal_means,
 signal_stds, signal_lens, base_probs, raw_signals, methy_label
 """
+
 # TODO: use pyguppyclient (https://github.com/nanoporetech/pyguppyclient) instead of --fast5-out
 
 from __future__ import absolute_import
@@ -11,15 +12,16 @@ import sys
 import os
 import argparse
 import time
+
 # import h5py
 import random
 import numpy as np
 import multiprocessing as mp
+
 # TODO: when using below import, will raise AttributeError: 'Queue' object has no attribute '_size'
 # TODO: in call_mods module, didn't figure out why
 # from .utils.process_utils import Queue
 from multiprocessing import Queue
-from statsmodels import robust
 
 from .utils.process_utils import str2bool
 from .utils.process_utils import display_args
@@ -37,6 +39,7 @@ from .extract_features import _get_signals_rect
 from .extract_features import _write_featurestr
 from .utils.process_utils import split_list
 from .utils.process_utils import _read_position_file
+from .utils.process_utils import normalize_signals
 
 LOGGER = get_logger(__name__)
 
@@ -45,9 +48,22 @@ time_wait = 0.1
 
 key_sep = "||"
 
-MAP_RES = namedtuple('MAP_RES', (
-    'read_id', 'q_seq', 'ref_seq', 'ctg', 'strand', 'r_st', 'r_en',
-    'q_st', 'q_en', 'cigar', 'mapq'))
+MAP_RES = namedtuple(
+    "MAP_RES",
+    (
+        "read_id",
+        "q_seq",
+        "ref_seq",
+        "ctg",
+        "strand",
+        "r_st",
+        "r_en",
+        "q_st",
+        "q_en",
+        "cigar",
+        "mapq",
+    ),
+)
 
 
 def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
@@ -84,15 +100,19 @@ def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
             pass
     q_to_r_poss[curr_q_pos] = curr_r_pos
     if q_to_r_poss[-1] == fill_invalid:
-        raise ValueError(('Invalid cigar string encountered. Reference length: {}  Cigar ' +
-                          'implied reference length: {}').format(seq_len, curr_r_pos))
+        raise ValueError(
+            (
+                "Invalid cigar string encountered. Reference length: {}  Cigar "
+                + "implied reference length: {}"
+            ).format(seq_len, curr_r_pos)
+        )
     return q_to_r_poss
 
 
 ################utils###################
 def _read_position_file(position_file):
     postions = set()
-    with open(position_file, 'r') as rf:
+    with open(position_file, "r") as rf:
         for line in rf:
             words = line.strip().split("\t")
             postions.add(key_sep.join(words[:3]))
@@ -104,60 +124,98 @@ def _features_to_str(features):
     :param features: a tuple
     :return:
     """
-    chrom, pos, alignstrand, loc_in_ref, readname, read_loc, k_mer, signal_means, signal_stds, \
-        signal_lens, k_signals_rect, methy_label = features
-    means_text = ','.join([str(x) for x in np.around(signal_means, decimals=6)])
-    stds_text = ','.join([str(x) for x in np.around(signal_stds, decimals=6)])
-    signal_len_text = ','.join([str(x) for x in signal_lens])
-    #base_probs_text = ",".join([str(x) for x in np.around(k_baseprobs, decimals=6)])
-    k_signals_text = ';'.join([",".join([str(y) for y in x]) for x in k_signals_rect])
-    #freq_text = ';'.join([",".join([str(y) for y in x]) for x in freq])
+    (
+        chrom,
+        pos,
+        alignstrand,
+        loc_in_ref,
+        readname,
+        read_loc,
+        k_mer,
+        signal_means,
+        signal_stds,
+        signal_lens,
+        k_signals_rect,
+        methy_label,
+    ) = features
+    means_text = ",".join([str(x) for x in np.around(signal_means, decimals=6)])
+    stds_text = ",".join([str(x) for x in np.around(signal_stds, decimals=6)])
+    signal_len_text = ",".join([str(x) for x in signal_lens])
+    # base_probs_text = ",".join([str(x) for x in np.around(k_baseprobs, decimals=6)])
+    k_signals_text = ";".join([",".join([str(y) for y in x]) for x in k_signals_rect])
+    # freq_text = ';'.join([",".join([str(y) for y in x]) for x in freq])
 
-    return "\t".join([chrom, str(pos), alignstrand, str(loc_in_ref), readname, str(read_loc), k_mer, means_text,
-                      stds_text, signal_len_text, k_signals_text, str(methy_label)])
+    return "\t".join(
+        [
+            chrom,
+            str(pos),
+            alignstrand,
+            str(loc_in_ref),
+            readname,
+            str(read_loc),
+            k_mer,
+            means_text,
+            stds_text,
+            signal_len_text,
+            k_signals_text,
+            str(methy_label),
+        ]
+    )
 
 
-def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy_label=1):
+def process_data(
+    data,
+    motif_seqs,
+    positions,
+    kmer_len,
+    signals_len,
+    methyloc=0,
+    methy_label=1,
+    norm_method="mad",
+):
     if kmer_len % 2 == 0:
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
     features_list = []
-    signal,seq_read=data
-    read_dict=dict(seq_read.tags)
-    mv_table=np.asarray(read_dict['mv'][1:])
-    stride=int(read_dict['mv'][0])
-    num_trimmed=read_dict["ts"]
+    signal, seq_read = data
+    read_dict = dict(seq_read.tags)
+    mv_table = np.asarray(read_dict["mv"][1:])
+    stride = int(read_dict["mv"][0])
+    num_trimmed = read_dict["ts"]
     norm_shift = read_dict["sm"]
     norm_scale = read_dict["sd"]
     if num_trimmed >= 0:
         signal_trimmed = (signal[num_trimmed:] - norm_shift) / norm_scale
     else:
         signal_trimmed = (signal[:num_trimmed] - norm_shift) / norm_scale
-    sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
-    if sscale == 0.0:
-        norm_signals = signal_trimmed
-    else:
-        norm_signals = (signal_trimmed - sshift) / sscale
-    seq=seq_read.get_forward_sequence()
+    norm_signals = normalize_signals(signal_trimmed, norm_method)
+    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    # if sscale == 0.0:
+    #    norm_signals = signal_trimmed
+    # else:
+    #    norm_signals = (signal_trimmed - sshift) / sscale
+    seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
-    strand='.'
+    strand = "."
     q_to_r_poss = None
     if not seq_read.is_unmapped:
-        strand="-" if seq_read.is_reverse else '+'
-        strand_code=-1 if seq_read.is_reverse else 1
-        ref_start=seq_read.reference_start
-        ref_end=seq_read.reference_end
-        cigar_tuples=seq_read.cigartuples
-        qalign_start=seq_read.query_alignment_start
-        qalign_end=seq_read.query_alignment_end
+        strand = "-" if seq_read.is_reverse else "+"
+        strand_code = -1 if seq_read.is_reverse else 1
+        ref_start = seq_read.reference_start
+        ref_end = seq_read.reference_end
+        cigar_tuples = seq_read.cigartuples
+        qalign_start = seq_read.query_alignment_start
+        qalign_end = seq_read.query_alignment_end
         if seq_read.is_reverse:
             seq_start = len(seq) - qalign_end
             seq_end = len(seq) - qalign_start
         else:
             seq_start = qalign_start
             seq_end = qalign_end
-        q_to_r_poss = get_q2tloc_from_cigar(cigar_tuples, strand_code, (seq_end - seq_start))
+        q_to_r_poss = get_q2tloc_from_cigar(
+            cigar_tuples, strand_code, (seq_end - seq_start)
+        )
     for loc_in_read in tsite_locs:
         if num_bases <= loc_in_read < len(seq) - num_bases:
             ref_pos = -1
@@ -165,17 +223,19 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
                 if seq_start <= loc_in_read < seq_end:
                     offset_idx = loc_in_read - seq_start
                     if q_to_r_poss[offset_idx] != -1:
-                        if strand == '-':
-                            #pos = '.'#loc_in_read
-                            ref_pos = ref_end  - 1 - q_to_r_poss[offset_idx]
+                        if strand == "-":
+                            # pos = '.'#loc_in_read
+                            ref_pos = ref_end - 1 - q_to_r_poss[offset_idx]
                         else:
-                            #pos = loc_in_read
+                            # pos = loc_in_read
                             ref_pos = ref_start + q_to_r_poss[offset_idx]
                 else:
                     continue
-            k_mer = seq[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
-            #k_seq=[base2code_dna[x] for x in k_mer]
-            k_signals = signal_group[(loc_in_read - num_bases):(loc_in_read + num_bases + 1)]
+            k_mer = seq[(loc_in_read - num_bases) : (loc_in_read + num_bases + 1)]
+            # k_seq=[base2code_dna[x] for x in k_mer]
+            k_signals = signal_group[
+                (loc_in_read - num_bases) : (loc_in_read + num_bases + 1)
+            ]
 
             signal_lens = [len(x) for x in k_signals]
             # if sum(signal_lens) > MAX_LEGAL_SIGNAL_NUM:
@@ -184,29 +244,57 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
             signal_means = [np.mean(x) for x in k_signals]
             signal_stds = [np.std(x) for x in k_signals]
             if seq_read.reference_name is None:
-                ref_name='.'
+                ref_name = "."
             else:
-                ref_name=seq_read.reference_name
-            #sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
-            if (positions is not None) and (key_sep.join([ref_name,str(ref_pos), strand]) not in positions):
+                ref_name = seq_read.reference_name
+            # sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
+            if (positions is not None) and (
+                key_sep.join([ref_name, str(ref_pos), strand]) not in positions
+            ):
                 continue
-            
-            features_list.append(_features_to_str((ref_name,str(ref_pos) , strand, '.', 
-                                                   seq_read.query_name, '.',k_mer, signal_means, 
-                                                   signal_stds,signal_lens, 
-                                                   _get_signals_rect(k_signals, signals_len),methy_label)))
+
+            features_list.append(
+                _features_to_str(
+                    (
+                        ref_name,
+                        str(ref_pos),
+                        strand,
+                        ".",
+                        seq_read.query_name,
+                        ".",
+                        k_mer,
+                        signal_means,
+                        signal_stds,
+                        signal_lens,
+                        _get_signals_rect(k_signals, signals_len),
+                        methy_label,
+                    )
+                )
+            )
     return features_list
 
 
-def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len, methyloc=0, methyl_label=1, qsize_limit=4):
-    chunk=[]
+def process_sig_seq(
+    seq_index,
+    sig_dr,
+    feature_Q,
+    motif_seqs,
+    positions,
+    kmer_len,
+    signals_len,
+    methyloc=0,
+    methyl_label=1,
+    norm_method="mad",
+    qsize_limit=4,
+):
+    chunk = []
     for filename in sig_dr:
         with pod5.Reader(filename) as reader:
             for read_record in reader.reads():
-                if feature_Q.qsize()>qsize_limit:
+                if feature_Q.qsize() > qsize_limit:
                     time.sleep(time_wait)
-                read_name=str(read_record.read_id)
-                signal=read_record.signal
+                read_name = str(read_record.read_id)
+                signal = read_record.signal
                 if signal is None:
                     continue
                 try:
@@ -214,16 +302,25 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,sig
                         seq = seq_read.get_forward_sequence()
                         if seq is None:
                             continue
-                        data=(signal,seq_read)
-                        feature_lists=process_data(data,motif_seqs,positions,kmer_len, signals_len, methyloc, methyl_label)
+                        data = (signal, seq_read)
+                        feature_lists = process_data(
+                            data,
+                            motif_seqs,
+                            positions,
+                            kmer_len,
+                            signals_len,
+                            methyloc,
+                            methyl_label,
+                            norm_method,
+                        )
                         feature_Q.put(feature_lists)
-                        chunk=[]               
+                        chunk = []
                 except KeyError:
-                    LOGGER.warn('Read:%s not found in BAM file' %read_name, flush=True)
+                    LOGGER.warn("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    if len(chunk)>0:
+    if len(chunk) > 0:
         feature_Q.put(chunk)
-        chunk=[]
+        chunk = []
 
 
 def extract_features(args):
@@ -234,7 +331,6 @@ def extract_features(args):
             raise ValueError("--reference_path not set right!")
     else:
         ref_path = None
-    
 
     LOGGER.info("[extract] starts")
 
@@ -250,41 +346,74 @@ def extract_features(args):
     is_recursive = str2bool(args.recursively)
     is_dna = False if args.rna else True
     motif_seqs = get_motif_seqs(args.motifs, is_dna)
-    bam_index=bam_reader.ReadIndexedBam(args.bam)
-    pod5_dr=get_files(input_dir,is_recursive,'.pod5')
-    
-    #pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
+    bam_index = bam_reader.ReadIndexedBam(args.bam)
+    pod5_dr = get_files(input_dir, is_recursive, ".pod5")
+
+    # pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
     features_batch_q = Queue()
     error_q = Queue()
-    p_rfs=[]
+    p_rfs = []
 
-    nproc = args.nproc-1
-    if nproc<len(pod5_dr):
-        data=split_list(pod5_dr, nproc)
+    nproc = args.nproc - 1
+    if nproc < len(pod5_dr):
+        data = split_list(pod5_dr, nproc)
         for sig_data in data:
-            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len, 
-                                                            args.signal_len, args.mod_loc, args.methy_label,
-                                                            args.r_batch_size),
-                          name="reader")
+            p_rf = mp.Process(
+                target=process_sig_seq,
+                args=(
+                    bam_index,
+                    sig_data,
+                    features_batch_q,
+                    motif_seqs,
+                    positions,
+                    args.seq_len,
+                    args.signal_len,
+                    args.mod_loc,
+                    args.methy_label,
+                    args.normalize_method,
+                    args.r_batch_size,
+                ),
+                name="reader",
+            )
             p_rf.daemon = True
             p_rf.start()
             p_rfs.append(p_rf)
     else:
-        data=split_list(pod5_dr, len(pod5_dr))
+        data = split_list(pod5_dr, len(pod5_dr))
         for sig_data in data:
-            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,
-                                                            args.signal_len, args.mod_loc, args.methy_label,
-                                                            args.r_batch_size),
-                          name="reader")
+            p_rf = mp.Process(
+                target=process_sig_seq,
+                args=(
+                    bam_index,
+                    sig_data,
+                    features_batch_q,
+                    motif_seqs,
+                    positions,
+                    args.seq_len,
+                    args.signal_len,
+                    args.mod_loc,
+                    args.methy_label,
+                    args.normalize_method,
+                    args.r_batch_size,
+                ),
+                name="reader",
+            )
             p_rf.daemon = True
             p_rf.start()
             p_rfs.append(p_rf)
-    #if nproc < 2:
+    # if nproc < 2:
     #    nproc = 2
 
-    p_w = mp.Process(target=_write_featurestr, args=(args.write_path, features_batch_q, args.w_batch_num,
-                                                     str2bool(args.w_is_dir)),
-                     name="writer")
+    p_w = mp.Process(
+        target=_write_featurestr,
+        args=(
+            args.write_path,
+            features_batch_q,
+            args.w_batch_num,
+            str2bool(args.w_is_dir),
+        ),
+        name="writer",
+    )
     p_w.daemon = True
     p_w.start()
     # finish processes
@@ -294,106 +423,223 @@ def extract_features(args):
 
     p_w.join()
 
-    LOGGER.info("[extract] finished, cost {:.1f}s".format(time.time()-start))
+    LOGGER.info("[extract] finished, cost {:.1f}s".format(time.time() - start))
 
 
 def main():
-    extraction_parser = argparse.ArgumentParser("extract features from pod5 for "
-                                                "training or testing."
-                                                "\nIt is suggested that running this module 1 flowcell a time, "
-                                                "or a group of flowcells a time, "
-                                                "if the whole data is extremely large.")
-    
+    extraction_parser = argparse.ArgumentParser(
+        "extract features from pod5 for "
+        "training or testing."
+        "\nIt is suggested that running this module 1 flowcell a time, "
+        "or a group of flowcells a time, "
+        "if the whole data is extremely large."
+    )
+
     ep_input = extraction_parser.add_argument_group("INPUT")
-    ep_input.add_argument("--input_dir", "-i", action="store", type=str,
-                          required=True,
-                          help="the directory of pod5 files")
-    ep_input.add_argument("--recursively", "-r", action="store", type=str, required=False,
-                          default='yes',
-                          help='is to find pod5 files from input_dir recursively. '
-                               'default true, t, yes, 1')
-    ep_input.add_argument("--reference_path", action="store",
-                          type=str, required=False,default=None,
-                          help="the reference file to be used, usually is a .fa file")
-    ep_input.add_argument("--rna", action="store_true", default=False, required=False,
-                          help='the fast5/pod5 files are from RNA samples. if is rna, the signals are reversed. '
-                               'NOTE: Currently no use, waiting for further extentsion')
-    ep_input.add_argument('--bam', type=str, 
-                        help='the bam filepath')
-    
+    ep_input.add_argument(
+        "--input_dir",
+        "-i",
+        action="store",
+        type=str,
+        required=True,
+        help="the directory of pod5 files",
+    )
+    ep_input.add_argument(
+        "--recursively",
+        "-r",
+        action="store",
+        type=str,
+        required=False,
+        default="yes",
+        help="is to find pod5 files from input_dir recursively. "
+        "default true, t, yes, 1",
+    )
+    ep_input.add_argument(
+        "--reference_path",
+        action="store",
+        type=str,
+        required=False,
+        default=None,
+        help="the reference file to be used, usually is a .fa file",
+    )
+    ep_input.add_argument(
+        "--rna",
+        action="store_true",
+        default=False,
+        required=False,
+        help="the fast5/pod5 files are from RNA samples. if is rna, the signals are reversed. "
+        "NOTE: Currently no use, waiting for further extentsion",
+    )
+    ep_input.add_argument("--bam", type=str, help="the bam filepath")
+
     ep_extraction = extraction_parser.add_argument_group("EXTRACTION")
-    ep_extraction.add_argument("--normalize_method", action="store", type=str, choices=["mad", "zscore"],
-                               default="mad", required=False,
-                               help="the way for normalizing signals in read level. "
-                                    "mad or zscore, default mad")
-    ep_extraction.add_argument("--methy_label", action="store", type=int,
-                               choices=[1, 0], required=False, default=1,
-                               help="the label of the interested modified bases, this is for training."
-                                    " 0 or 1, default 1")
-    ep_extraction.add_argument("--seq_len", action="store",
-                               type=int, required=False, default=21,
-                               help="len of kmer. default 21")
-    ep_extraction.add_argument("--signal_len", action="store",
-                               type=int, required=False, default=16,
-                               help="the number of signals of one base to be used in deepsignal_plant, default 16")
-    ep_extraction.add_argument("--motifs", action="store", type=str,
-                               required=False, default='CG',
-                               help='motif seq to be extracted, default: CG. '
-                                    'can be multi motifs splited by comma '
-                                    '(no space allowed in the input str), '
-                                    'or use IUPAC alphabet, '
-                                    'the mod_loc of all motifs must be '
-                                    'the same')
-    ep_extraction.add_argument("--mod_loc", action="store", type=int, required=False, default=0,
-                               help='0-based location of the targeted base in the motif, default 0')
+    ep_extraction.add_argument(
+        "--normalize_method",
+        action="store",
+        type=str,
+        choices=["mad", "zscore"],
+        default="mad",
+        required=False,
+        help="the way for normalizing signals in read level. "
+        "mad or zscore, default mad",
+    )
+    ep_extraction.add_argument(
+        "--methy_label",
+        action="store",
+        type=int,
+        choices=[1, 0],
+        required=False,
+        default=1,
+        help="the label of the interested modified bases, this is for training."
+        " 0 or 1, default 1",
+    )
+    ep_extraction.add_argument(
+        "--seq_len",
+        action="store",
+        type=int,
+        required=False,
+        default=21,
+        help="len of kmer. default 21",
+    )
+    ep_extraction.add_argument(
+        "--signal_len",
+        action="store",
+        type=int,
+        required=False,
+        default=16,
+        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+    )
+    ep_extraction.add_argument(
+        "--motifs",
+        action="store",
+        type=str,
+        required=False,
+        default="CG",
+        help="motif seq to be extracted, default: CG. "
+        "can be multi motifs splited by comma "
+        "(no space allowed in the input str), "
+        "or use IUPAC alphabet, "
+        "the mod_loc of all motifs must be "
+        "the same",
+    )
+    ep_extraction.add_argument(
+        "--mod_loc",
+        action="store",
+        type=int,
+        required=False,
+        default=0,
+        help="0-based location of the targeted base in the motif, default 0",
+    )
     # ep_extraction.add_argument("--region", action="store", type=str,
     #                            required=False, default=None,
     #                            help="region of interest, e.g.: chr1:0-10000, default None, "
     #                                 "for the whole region")
-    ep_extraction.add_argument("--positions", action="store", type=str,
-                               required=False, default=None,
-                               help="file with a list of positions interested (must be formatted as tab-separated file"
-                                    " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
-                                    "need to be set. --positions is used to narrow down the range of the trageted "
-                                    "motif locs. default None")
-    ep_extraction.add_argument("--r_batch_size", action="store", type=int, default=50,
-                               required=False,
-                               help="number of files to be processed by each process one time, default 50")
-    ep_extraction.add_argument("--pad_only_r", action="store_true", default=False,
-                               help="pad zeros to only the right of signals array of one base, "
-                               "when the number of signals is less than --signal_len. "
-                               "default False (pad in two sides).")
+    ep_extraction.add_argument(
+        "--positions",
+        action="store",
+        type=str,
+        required=False,
+        default=None,
+        help="file with a list of positions interested (must be formatted as tab-separated file"
+        " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
+        "need to be set. --positions is used to narrow down the range of the trageted "
+        "motif locs. default None",
+    )
+    ep_extraction.add_argument(
+        "--r_batch_size",
+        action="store",
+        type=int,
+        default=50,
+        required=False,
+        help="number of files to be processed by each process one time, default 50",
+    )
+    ep_extraction.add_argument(
+        "--pad_only_r",
+        action="store_true",
+        default=False,
+        help="pad zeros to only the right of signals array of one base, "
+        "when the number of signals is less than --signal_len. "
+        "default False (pad in two sides).",
+    )
 
     ep_mapping = extraction_parser.add_argument_group("MAPPING")
-    ep_mapping.add_argument("--mapping", action="store_true", default=False, required=False,
-                            help='use MAPPING to get alignment, default false')
-    ep_mapping.add_argument("--mapq", type=int, default=10, required=False,
-                            help="MAPping Quality cutoff for selecting alignment items, default 10")
-    ep_mapping.add_argument("--identity", type=float, default=0.75, required=False,
-                            help="identity cutoff for selecting alignment items, default 0.75")
-    ep_mapping.add_argument("--coverage_ratio", type=float, default=0.75, required=False,
-                            help="percent of coverage, read alignment len against read len, default 0.75")
-    ep_mapping.add_argument("--best_n", "-n", type=int, default=1, required=False,
-                            help="best_n arg in mappy(minimap2), default 1")
+    ep_mapping.add_argument(
+        "--mapping",
+        action="store_true",
+        default=False,
+        required=False,
+        help="use MAPPING to get alignment, default false",
+    )
+    ep_mapping.add_argument(
+        "--mapq",
+        type=int,
+        default=10,
+        required=False,
+        help="MAPping Quality cutoff for selecting alignment items, default 10",
+    )
+    ep_mapping.add_argument(
+        "--identity",
+        type=float,
+        default=0.75,
+        required=False,
+        help="identity cutoff for selecting alignment items, default 0.75",
+    )
+    ep_mapping.add_argument(
+        "--coverage_ratio",
+        type=float,
+        default=0.75,
+        required=False,
+        help="percent of coverage, read alignment len against read len, default 0.75",
+    )
+    ep_mapping.add_argument(
+        "--best_n",
+        "-n",
+        type=int,
+        default=1,
+        required=False,
+        help="best_n arg in mappy(minimap2), default 1",
+    )
 
     ep_output = extraction_parser.add_argument_group("OUTPUT")
-    ep_output.add_argument("--write_path", "-o", action="store",
-                           type=str, required=True,
-                           help='file path to save the features')
-    ep_output.add_argument("--w_is_dir", action="store",
-                           type=str, required=False, default="no",
-                           help='if using a dir to save features into multiple files')
-    ep_output.add_argument("--w_batch_num", action="store",
-                           type=int, required=False, default=200,
-                           help='features batch num to save in a single writed file when --is_dir is true')
+    ep_output.add_argument(
+        "--write_path",
+        "-o",
+        action="store",
+        type=str,
+        required=True,
+        help="file path to save the features",
+    )
+    ep_output.add_argument(
+        "--w_is_dir",
+        action="store",
+        type=str,
+        required=False,
+        default="no",
+        help="if using a dir to save features into multiple files",
+    )
+    ep_output.add_argument(
+        "--w_batch_num",
+        action="store",
+        type=int,
+        required=False,
+        default=200,
+        help="features batch num to save in a single writed file when --is_dir is true",
+    )
 
-    extraction_parser.add_argument("--nproc", "-p", action="store", type=int, default=10,
-                                   required=False,
-                                   help="number of processes to be used, default 10")
+    extraction_parser.add_argument(
+        "--nproc",
+        "-p",
+        action="store",
+        type=int,
+        default=10,
+        required=False,
+        help="number of processes to be used, default 10",
+    )
 
     extraction_args = extraction_parser.parse_args()
     display_args(extraction_args)
     extract_features(extraction_args)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     sys.exit(main())
