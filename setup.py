@@ -52,7 +52,7 @@ with open('requirements.txt', 'r') as rf:
 
 setup(
     name='deepsignal3',
-    packages=['deepsignal3'],
+    packages=['deepsignal3', 'deepsignal3.utils'],
     keywords=['methylation', 'nanopore', 'neural network'],
     version=__version__,
     url='https://github.com/PengNi/deepsignal3',
