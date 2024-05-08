@@ -23,7 +23,7 @@ deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https:/
    [statsmodels](https://github.com/statsmodels/statsmodels/) \
    [scikit-learn](https://scikit-learn.org/stable/) \
    [mappy](https://github.com/lh3/minimap2/tree/master/python) \
-   [PyTorch](https://pytorch.org/) (version >=1.2.0, <=1.18.0)
+   [PyTorch](https://pytorch.org/) (version >=1.2.0, <=2.1.0)
 
 #### 1. Create an environment
 

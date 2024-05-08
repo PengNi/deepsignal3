@@ -4,10 +4,6 @@ from functools import cached_property
 from dataclasses import dataclass
 
 import numpy as np
-from statsmodels import robust
-
-
-
 
 
 def get_parent_id(bam_read):
@@ -17,6 +13,8 @@ def get_parent_id(bam_read):
     except KeyError:
         # else this is the parent read so return query_name
         return bam_read.query_name
+
+
 @dataclass        
 class ReadIndexedBam:
     bam_path: str
@@ -72,7 +70,6 @@ class ReadIndexedBam:
         self._bam_idx = dict(self._bam_idx)
         self.num_reads = len(self._bam_idx)
     
-
     def get_alignments(self, read_id):#多重序列比对，一条read可能map到多个位置
         if self._bam_idx is None:
             None
@@ -117,7 +114,8 @@ class ReadIndexedBam:
         if self._iter is None:
             self._iter = iter(self.bam_fh)
         return next(self._iter)
-    
+
+   
 def get_read_ids(bam_idx, pod5_dr, num_reads=None, return_num_bam_reads=False):
     """Get overlapping read ids from bam index and pod5 file
 
@@ -151,6 +149,7 @@ def get_read_ids(bam_idx, pod5_dr, num_reads=None, return_num_bam_reads=False):
         num_reads = min(num_reads, num_both_read_ids)
     return both_read_ids, num_reads
 
+
 class Read:
     def __init__(self, pod5_record,bam_record,read_id):#pysam.AlignedSegment
         self._readid=read_id
@@ -172,14 +171,19 @@ class Read:
 
     def get_readid(self):
         return self._readid
+    
     def get_raw_signal(self):
         return self._signal
+    
     def get_seq(self):
         return self._seq.strip()
+    
     def get_move(self):
         return np.asarray(self._tag['mv'][1:])
+    
     def get_stride(self):
         return int(self._tag['mv'][0])
+    
     def rescale_signals(self):
         num_trimmed = self._num_trimmed
         signal=self._signal
@@ -192,49 +196,20 @@ class Read:
             signal[:num_trimmed] - self._norm_shift
         ) / self._norm_scale
         return self._signal
+    
     def check_signal(self):
         assert self._signal is not None
+    
     def check_seq(self):
         assert self._seq is not None
+    
     def check_map(self,bam_record):
         assert bam_record.is_unmapped is False
 
     def get_map_info(self,bam_record):
-        #self._cigar_tuples = bam_record.cigartuples
-        #self._cigar_stats = bam_record.get_cigar_stats()
-        #return self._ref_name,self._read_start,self._read_end,self._ref_start,\
-        #    self._ref_end,self._cigar_tuples,self._cigar_stats,bam_record.is_reverse,bam_record.get_reference_sequence()
-        #movetable=self.get_move()
-        #move_pos = np.append(np.argwhere(movetable == 1).flatten(), len(movetable))
-        #print('1')
-        #print(bam_record.cigartuples)
         cigars=bam_record.cigarstring
-        #print('2')
-        #print(bam_record.cigartuples)
-        #print(bam_record.get_cigar_stats())
-        #print('read cigars')
-        #chrom_strands=[]
         chrom_strands=(self._ref_name,self._strand)
-        #print('1')
-        #frags=[]
-        frags=(self._read_start,self._read_end,self._ref_start,self._ref_end)#add tuple will occur error
-        #print('2')
-        
-        #for move_idx in range(len(move_pos) - 1):
-        #    chrom_strands.append((self._ref_name,self._strand))
-        #    frags.append(tuple(self._read_poses[move_idx],self._read_poses[move_idx]+1,self._ref_poses[move_idx],self._ref_poses[move_idx]+1))
-        #print('if occur error, that is happened in returning')
+        frags=(self._read_start,self._read_end,self._ref_start,self._ref_end)  #add tuple will occur error
         mapinfo=[]
         mapinfo.append((cigars, chrom_strands, frags))
-        #print(mapinfo)
         return mapinfo
-    
-    #def normalize_signals(self, normalize_method="mad"):
-    #    signal=self._signal
-    #    if normalize_method == "zscore":
-    #        sshift, sscale = np.mean(signal), np.std(signal)
-    #    elif normalize_method == "mad":
-    #        sshift, sscale = np.median(signal), robust.mad(signal)
-    #
-    #    self._signal = (self._signal - sshift) / sscale
-

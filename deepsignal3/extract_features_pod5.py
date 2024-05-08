@@ -191,8 +191,10 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
             if (positions is not None) and (key_sep.join([ref_name,str(ref_pos), strand]) not in positions):
                 continue
             
-            features_list.append(_features_to_str((ref_name,str(ref_pos) , strand, '.', seq_read.query_name, '.',k_mer, signal_means, signal_stds,signal_lens,
-                                    _get_signals_rect(k_signals, signals_len),methy_label)))
+            features_list.append(_features_to_str((ref_name,str(ref_pos) , strand, '.', 
+                                                   seq_read.query_name, '.',k_mer, signal_means, 
+                                                   signal_stds,signal_lens, 
+                                                   _get_signals_rect(k_signals, signals_len),methy_label)))
     return features_list
 
 
