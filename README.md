@@ -252,5 +252,6 @@ export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/lo
 
 ## Todo
 
+- [ ] add tqdm for progress bar
 - [ ] support data input format slow5 and blow5
 - [ ] support data output format bam

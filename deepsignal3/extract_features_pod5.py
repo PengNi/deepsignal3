@@ -222,7 +222,7 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,sig
                         feature_Q.put(feature_lists)
                         chunk=[]               
                 except KeyError:
-                    print('Read:%s not found in BAM file' %read_name, flush=True)
+                    LOGGER.warn('Read:%s not found in BAM file' %read_name, flush=True)
                     continue
     if len(chunk)>0:
         feature_Q.put(chunk)
