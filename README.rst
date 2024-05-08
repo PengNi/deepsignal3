@@ -4,17 +4,9 @@ deepsignal3
 
 Release
 -------
-0.1.2
------
-multi-gpu support in call_mods module
-
-make sure results of each read be written together in call_mods' output
-
 0.1.1
 -----
-fix bug and optimize call_mods without GPU, add call_freq funciton
-
-combine pore-c segmental reads when extracting features
+freeze version of the first released models
 
 0.1.0
 -----
