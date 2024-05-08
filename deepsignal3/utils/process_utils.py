@@ -10,38 +10,116 @@ import math
 import logging
 import re
 
-basepairs = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N',
-             'W': 'W', 'S': 'S', 'M': 'K', 'K': 'M', 'R': 'Y',
-             'Y': 'R', 'B': 'V', 'V': 'B', 'D': 'H', 'H': "D",
-             'Z': 'Z'}
-basepairs_rna = {'A': 'U', 'C': 'G', 'G': 'C', 'U': 'A', 'N': 'N',
-                 'W': 'W', 'S': 'S', 'M': 'K', 'K': 'M', 'R': 'Y',
-                 'Y': 'R', 'B': 'V', 'V': 'B', 'D': 'H', 'H': "D",
-                 'Z': 'Z'}
+basepairs = {
+    "A": "T",
+    "C": "G",
+    "G": "C",
+    "T": "A",
+    "N": "N",
+    "W": "W",
+    "S": "S",
+    "M": "K",
+    "K": "M",
+    "R": "Y",
+    "Y": "R",
+    "B": "V",
+    "V": "B",
+    "D": "H",
+    "H": "D",
+    "Z": "Z",
+}
+basepairs_rna = {
+    "A": "U",
+    "C": "G",
+    "G": "C",
+    "U": "A",
+    "N": "N",
+    "W": "W",
+    "S": "S",
+    "M": "K",
+    "K": "M",
+    "R": "Y",
+    "Y": "R",
+    "B": "V",
+    "V": "B",
+    "D": "H",
+    "H": "D",
+    "Z": "Z",
+}
 
-base2code_dna = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'N': 4,
-                 'W': 5, 'S': 6, 'M': 7, 'K': 8, 'R': 9,
-                 'Y': 10, 'B': 11, 'V': 12, 'D': 13, 'H': 14,
-                 'Z': 15}
+base2code_dna = {
+    "A": 0,
+    "C": 1,
+    "G": 2,
+    "T": 3,
+    "N": 4,
+    "W": 5,
+    "S": 6,
+    "M": 7,
+    "K": 8,
+    "R": 9,
+    "Y": 10,
+    "B": 11,
+    "V": 12,
+    "D": 13,
+    "H": 14,
+    "Z": 15,
+}
 code2base_dna = dict((v, k) for k, v in base2code_dna.items())
-base2code_rna = {'A': 0, 'C': 1, 'G': 2, 'U': 3, 'N': 4,
-                 'W': 5, 'S': 6, 'M': 7, 'K': 8, 'R': 9,
-                 'Y': 10, 'B': 11, 'V': 12, 'D': 13, 'H': 14,
-                 'Z': 15}
+base2code_rna = {
+    "A": 0,
+    "C": 1,
+    "G": 2,
+    "U": 3,
+    "N": 4,
+    "W": 5,
+    "S": 6,
+    "M": 7,
+    "K": 8,
+    "R": 9,
+    "Y": 10,
+    "B": 11,
+    "V": 12,
+    "D": 13,
+    "H": 14,
+    "Z": 15,
+}
 code2base_rna = dict((v, k) for k, v in base2code_rna.items())
 
-iupac_alphabets = {'A': ['A'], 'T': ['T'], 'C': ['C'], 'G': ['G'],
-                   'R': ['A', 'G'], 'M': ['A', 'C'], 'S': ['C', 'G'],
-                   'Y': ['C', 'T'], 'K': ['G', 'T'], 'W': ['A', 'T'],
-                   'B': ['C', 'G', 'T'], 'D': ['A', 'G', 'T'],
-                   'H': ['A', 'C', 'T'], 'V': ['A', 'C', 'G'],
-                   'N': ['A', 'C', 'G', 'T']}
-iupac_alphabets_rna = {'A': ['A'], 'C': ['C'], 'G': ['G'], 'U': ['U'],
-                       'R': ['A', 'G'], 'M': ['A', 'C'], 'S': ['C', 'G'],
-                       'Y': ['C', 'U'], 'K': ['G', 'U'], 'W': ['A', 'U'],
-                       'B': ['C', 'G', 'U'], 'D': ['A', 'G', 'U'],
-                       'H': ['A', 'C', 'U'], 'V': ['A', 'C', 'G'],
-                       'N': ['A', 'C', 'G', 'U']}
+iupac_alphabets = {
+    "A": ["A"],
+    "T": ["T"],
+    "C": ["C"],
+    "G": ["G"],
+    "R": ["A", "G"],
+    "M": ["A", "C"],
+    "S": ["C", "G"],
+    "Y": ["C", "T"],
+    "K": ["G", "T"],
+    "W": ["A", "T"],
+    "B": ["C", "G", "T"],
+    "D": ["A", "G", "T"],
+    "H": ["A", "C", "T"],
+    "V": ["A", "C", "G"],
+    "N": ["A", "C", "G", "T"],
+}
+iupac_alphabets_rna = {
+    "A": ["A"],
+    "C": ["C"],
+    "G": ["G"],
+    "U": ["U"],
+    "R": ["A", "G"],
+    "M": ["A", "C"],
+    "S": ["C", "G"],
+    "Y": ["C", "U"],
+    "K": ["G", "U"],
+    "W": ["A", "U"],
+    "B": ["C", "G", "U"],
+    "D": ["A", "G", "U"],
+    "H": ["A", "C", "U"],
+    "V": ["A", "C", "G"],
+    "N": ["A", "C", "G", "U"],
+}
 
 CODE2CIGAR = "MIDNSHP=XB"
 CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
@@ -57,8 +135,9 @@ bwa_exec = "bwa"
 minimap2_exec = "minimap2"
 
 
-def generate_aligner_with_options(is_bwa, path_to_bwa, path_to_minimap2=None,
-                                  bestn=1, threads=1):  # disable bestn, threads
+def generate_aligner_with_options(
+    is_bwa, path_to_bwa, path_to_minimap2=None, bestn=1, threads=1
+):  # disable bestn, threads
     aligner = minimap2_exec
     if is_bwa:
         aligner = bwa_exec
@@ -73,17 +152,18 @@ def generate_aligner_with_options(is_bwa, path_to_bwa, path_to_minimap2=None,
         if num_sencondary == 0:
             aligner += " -ax map-pb -y -t {t} --secondary=no".format(t=threads)
         else:
-            aligner += " -ax map-pb -y -t {t} -N {N}".format(t=threads,
-                                                             N=num_sencondary)
+            aligner += " -ax map-pb -y -t {t} -N {N}".format(
+                t=threads, N=num_sencondary
+            )
     return aligner
 
 
 # logging functions ================================================================
 # log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-log_fmt = '%(asctime)s - %(levelname)s - %(message)s'
+log_fmt = "%(asctime)s - %(levelname)s - %(message)s"
 log_datefmt = "%Y-%m-%d %H:%M:%S"
 log_formatter = logging.Formatter(log_fmt, log_datefmt)
-LOG_FN = '/tmp/deepsignal3.log'
+LOG_FN = "/tmp/deepsignal3.log"
 
 
 def get_logger(module="", level=logging.INFO):
@@ -116,21 +196,21 @@ def str2bool(v):
 def _alphabet(letter, dbasepairs):
     if letter in dbasepairs.keys():
         return dbasepairs[letter]
-    return 'N'
+    return "N"
 
 
 def complement_seq(base_seq, seq_type="DNA"):
     rbase_seq = base_seq[::-1]
-    comseq = ''
+    comseq = ""
     try:
         if seq_type == "DNA":
-            comseq = ''.join([_alphabet(x, basepairs) for x in rbase_seq])
+            comseq = "".join([_alphabet(x, basepairs) for x in rbase_seq])
         elif seq_type == "RNA":
-            comseq = ''.join([_alphabet(x, basepairs_rna) for x in rbase_seq])
+            comseq = "".join([_alphabet(x, basepairs_rna) for x in rbase_seq])
         else:
             raise ValueError("the seq_type must be DNA or RNA")
     except Exception:
-        print('something wrong in the dna/rna sequence.')
+        print("something wrong in the dna/rna sequence.")
     return comseq
 
 
@@ -164,8 +244,8 @@ def get_refloc_of_methysite_in_motif(seqstr, motifset, methyloc_in_motif=0):
     motiflen = len(list(motifset)[0])
     sites = []
     for i in range(0, strlen - motiflen + 1):
-        if seqstr[i:i + motiflen] in motifset:
-            sites.append(i+methyloc_in_motif)
+        if seqstr[i : i + motiflen] in motifset:
+            sites.append(i + methyloc_in_motif)
     return sites
 
 
@@ -190,11 +270,12 @@ def _convert_motif_seq(ori_seq, is_dna=True):
             pseqs = recursive_permute(bases_list[1:])
             pseq_list = [bases_list[0], pseqs]
             return recursive_permute(pseq_list)
+
     return recursive_permute(outbases)
 
 
 def get_motif_seqs(motifs, is_dna=True):
-    ori_motif_seqs = motifs.strip().split(',')
+    ori_motif_seqs = motifs.strip().split(",")
 
     motif_seqs = []
     for ori_motif in ori_motif_seqs:
@@ -202,18 +283,18 @@ def get_motif_seqs(motifs, is_dna=True):
     return motif_seqs
 
 
-def get_files(input_dir, is_recursive=True,file_type='.fast5'):
+def get_files(input_dir, is_recursive=True, file_type=".fast5"):
     input_dir = os.path.abspath(input_dir)
     inputs = []
     if is_recursive:
         for root, dirnames, filenames in os.walk(input_dir):
-            for filename in fnmatch.filter(filenames, '*'+file_type):
+            for filename in fnmatch.filter(filenames, "*" + file_type):
                 file_path = os.path.join(root, filename)
                 inputs.append(file_path)
     else:
         for file_name in os.listdir(input_dir):
             if file_name.endswith(file_type):
-                file_path = '/'.join([input_dir, file_name])
+                file_path = "/".join([input_dir, file_name])
                 inputs.append(file_path)
     return inputs
 
@@ -221,16 +302,18 @@ def get_files(input_dir, is_recursive=True,file_type='.fast5'):
 # functions for combining files and random sampling lines of txt files ================
 def count_line_num(sl_filepath, fheader=False):
     count = 0
-    with open(sl_filepath, 'r') as rf:
+    with open(sl_filepath, "r") as rf:
         if fheader:
             next(rf)
         for _ in rf:
             count += 1
-    print('done count the lines of file {}'.format(sl_filepath))
+    print("done count the lines of file {}".format(sl_filepath))
     return count
 
 
-def random_select_file_rows(ori_file, w_file, w_other_file=None, maxrownum=100000000, header=False):
+def random_select_file_rows(
+    ori_file, w_file, w_other_file=None, maxrownum=100000000, header=False
+):
     """
 
     :param ori_file:
@@ -249,20 +332,24 @@ def random_select_file_rows(ori_file, w_file, w_other_file=None, maxrownum=10000
             nrows += 1
     if header:
         nrows -= 1
-    print('thera are {} lines (rm header if a header exists) in the file {}'.format(nrows, ori_file))
+    print(
+        "thera are {} lines (rm header if a header exists) in the file {}".format(
+            nrows, ori_file
+        )
+    )
 
     actual_nline = maxrownum
     if nrows <= actual_nline:
         actual_nline = nrows
-        print('gonna return all lines in ori_file {}'.format(ori_file))
+        print("gonna return all lines in ori_file {}".format(ori_file))
 
-    random_lines = random.sample(range(1, nrows+1), actual_nline)
+    random_lines = random.sample(range(1, nrows + 1), actual_nline)
     random_lines = [0] + sorted(random_lines)
     random_lines[-1] = nrows
 
-    wf = open(w_file, 'w')
+    wf = open(w_file, "w")
     if w_other_file is not None:
-        wlf = open(w_other_file, 'w')
+        wlf = open(w_other_file, "w")
     with open(ori_file) as rf:
         if header:
             lineheader = next(rf)
@@ -270,8 +357,8 @@ def random_select_file_rows(ori_file, w_file, w_other_file=None, maxrownum=10000
             if w_other_file is not None:
                 wlf.write(lineheader)
         for i in range(1, len(random_lines)):
-            chosen_line = ''
-            for j in range(0, random_lines[i]-random_lines[i-1] - 1):
+            chosen_line = ""
+            for j in range(0, random_lines[i] - random_lines[i - 1] - 1):
                 other_line = next(rf)
                 if w_other_file is not None:
                     wlf.write(other_line)
@@ -280,10 +367,12 @@ def random_select_file_rows(ori_file, w_file, w_other_file=None, maxrownum=10000
     wf.close()
     if w_other_file is not None:
         wlf.close()
-    print('random_select_file_rows finished..')
+    print("random_select_file_rows finished..")
 
 
-def random_select_file_rows_s(ori_file, w_file, w_other_file, maxrownum=100000000, header=False):
+def random_select_file_rows_s(
+    ori_file, w_file, w_other_file, maxrownum=100000000, header=False
+):
     """
     split line indexs to two arrays randomly, write the two group of lines into two files,
      and return the arrays
@@ -303,19 +392,23 @@ def random_select_file_rows_s(ori_file, w_file, w_other_file, maxrownum=10000000
             nrows += 1
     if header:
         nrows -= 1
-    print('thera are {} lines (rm header if a header exists) in the file {}'.format(nrows, ori_file))
+    print(
+        "thera are {} lines (rm header if a header exists) in the file {}".format(
+            nrows, ori_file
+        )
+    )
 
     actual_nline = maxrownum
     if nrows <= actual_nline:
         actual_nline = nrows
-        print('gonna return all lines in ori_file {}'.format(ori_file))
+        print("gonna return all lines in ori_file {}".format(ori_file))
 
-    random_lines = random.sample(range(1, nrows+1), actual_nline)
+    random_lines = random.sample(range(1, nrows + 1), actual_nline)
     random_lines = [0] + sorted(random_lines)
     random_lines[-1] = nrows
 
-    wf = open(w_file, 'w')
-    wlf = open(w_other_file, 'w')
+    wf = open(w_file, "w")
+    wlf = open(w_other_file, "w")
     lidxs1, lidxs2 = [], []
     lidx_cnt = 0
     with open(ori_file) as rf:
@@ -324,8 +417,8 @@ def random_select_file_rows_s(ori_file, w_file, w_other_file, maxrownum=10000000
             wf.write(lineheader)
             wlf.write(lineheader)
         for i in range(1, len(random_lines)):
-            chosen_line = ''
-            for j in range(0, random_lines[i]-random_lines[i-1] - 1):
+            chosen_line = ""
+            for j in range(0, random_lines[i] - random_lines[i - 1] - 1):
                 wlf.write(next(rf))
                 lidxs2.append(lidx_cnt)
                 lidx_cnt += 1
@@ -335,13 +428,18 @@ def random_select_file_rows_s(ori_file, w_file, w_other_file, maxrownum=10000000
             lidx_cnt += 1
     wf.close()
     wlf.close()
-    print('random_select_file_rows_s finished, file1: {}, file2: {}..'.format(len(lidxs1),
-                                                                              len(lidxs2)))
+    print(
+        "random_select_file_rows_s finished, file1: {}, file2: {}..".format(
+            len(lidxs1), len(lidxs2)
+        )
+    )
     return lidxs1, lidxs2
 
 
-def read_one_shuffle_info(filepath, shuffle_lines_num, total_lines_num, checked_lines_num, isheader):
-    with open(filepath, 'r') as rf:
+def read_one_shuffle_info(
+    filepath, shuffle_lines_num, total_lines_num, checked_lines_num, isheader
+):
+    with open(filepath, "r") as rf:
         if isheader:
             next(rf)
         count = 0
@@ -358,7 +456,7 @@ def read_one_shuffle_info(filepath, shuffle_lines_num, total_lines_num, checked_
                 count += 1
             else:
                 break
-        print('done reading file {}'.format(filepath))
+        print("done reading file {}".format(filepath))
         return lines_info
 
 
@@ -372,19 +470,25 @@ def shuffle_samples(samples_info):
 
 
 def write_to_one_file_append(features_info, wfilepath):
-    with open(wfilepath, 'a') as wf:
+    with open(wfilepath, "a") as wf:
         for i in range(0, len(features_info)):
-            wf.write(features_info[i] + '\n')
-    print('done writing features info to {}'.format(wfilepath))
+            wf.write(features_info[i] + "\n")
+    print("done writing features info to {}".format(wfilepath))
 
 
-def concat_two_files(file1, file2, concated_fp, shuffle_lines_num=2000000,
-                     lines_num=1000000000000, isheader=False):
-    open(concated_fp, 'w').close()
+def concat_two_files(
+    file1,
+    file2,
+    concated_fp,
+    shuffle_lines_num=2000000,
+    lines_num=1000000000000,
+    isheader=False,
+):
+    open(concated_fp, "w").close()
 
     if isheader:
-        rf1 = open(file1, 'r')
-        wf = open(concated_fp, 'a')
+        rf1 = open(file1, "r")
+        wf = open(concated_fp, "a")
         wf.write(next(rf1))
         wf.close()
         rf1.close()
@@ -397,9 +501,13 @@ def concat_two_files(file1, file2, concated_fp, shuffle_lines_num=2000000,
 
     checked_lines_num1, checked_lines_num2 = 0, 0
     while checked_lines_num1 < lines_num or checked_lines_num2 < lines_num:
-        file1_info = read_one_shuffle_info(file1, shuffle_lines_num, lines_num, checked_lines_num1, isheader)
+        file1_info = read_one_shuffle_info(
+            file1, shuffle_lines_num, lines_num, checked_lines_num1, isheader
+        )
         checked_lines_num1 += len(file1_info)
-        file2_info = read_one_shuffle_info(file2, shuffle_lines_num2, lines_num, checked_lines_num2, False)
+        file2_info = read_one_shuffle_info(
+            file2, shuffle_lines_num2, lines_num, checked_lines_num2, False
+        )
         checked_lines_num2 += len(file2_info)
         if len(file1_info) == 0 and len(file2_info) == 0:
             break
@@ -410,7 +518,9 @@ def concat_two_files(file1, file2, concated_fp, shuffle_lines_num=2000000,
         del file2_info
         del samples_info
         gc.collect()
-    print('done concating files to: {}'.format(concated_fp))
+    print("done concating files to: {}".format(concated_fp))
+
+
 # =====================================================================================
 
 
@@ -419,23 +529,28 @@ def display_args(args):
     print("# ===============================================")
     print("## parameters: ")
     for arg_key in arg_vars.keys():
-        if arg_key != 'func':
+        if arg_key != "func":
             print("{}:\n\t{}".format(arg_key, arg_vars[arg_key]))
     print("# ===============================================")
 
+
 def split_list(data, num_chunks):
-    
+
     avg_chunk_size = len(data) // num_chunks
-    chunks = [data[i:i+avg_chunk_size] for i in range(0, len(data), avg_chunk_size)]
+    chunks = [data[i : i + avg_chunk_size] for i in range(0, len(data), avg_chunk_size)]
     return chunks
+
+
 def _read_position_file(position_file):
     key_sep = "||"
     postions = set()
-    with open(position_file, 'r') as rf:
+    with open(position_file, "r") as rf:
         for line in rf:
             words = line.strip().split("\t")
             postions.add(key_sep.join(words[:3]))
     return postions
+
+
 # for balancing kmer distri in training samples ===
 def _count_kmers_of_feafile(feafile):
     kmer_count = {}
@@ -456,7 +571,7 @@ def _get_kmer2ratio_n_totalline(kmer_count):
     total_cnt = sum(list(kmer_count.values()))
     kmer_ratios = dict()
     for kmer in kmer_count.keys():
-        kmer_ratios[kmer] = float(kmer_count[kmer])/total_cnt
+        kmer_ratios[kmer] = float(kmer_count[kmer]) / total_cnt
     return kmer_ratios, total_cnt
 
 
@@ -482,9 +597,11 @@ def _rand_select_by_kmer_ratio(kmer2lines, kmer2ratios, totalline):
     inter_kmers = set(kmer2lines.keys()).intersection(set(kmer2ratios.keys()))
     line_kmer_diff = set(kmer2lines.keys()).difference(set(kmer2ratios.keys()))
     ratio_kmer_diff = set(kmer2ratios.keys()).difference(set(kmer2lines.keys()))
-    print("comm kmers: {}, line_kmers_diff: {}, ratio_kmers_diff: {}".format(len(inter_kmers),
-                                                                             len(line_kmer_diff),
-                                                                             len(ratio_kmer_diff)))
+    print(
+        "comm kmers: {}, line_kmers_diff: {}, ratio_kmers_diff: {}".format(
+            len(inter_kmers), len(line_kmer_diff), len(ratio_kmer_diff)
+        )
+    )
     selected_lines = []
     unratioed_kmers = line_kmer_diff
     cnts = 0
@@ -493,21 +610,26 @@ def _rand_select_by_kmer_ratio(kmer2lines, kmer2ratios, totalline):
         lines = kmer2lines[kmer]
         if len(lines) <= linenum:
             selected_lines += lines
-            cnts += (linenum - len(lines))
+            cnts += linenum - len(lines)
         else:
             selected_lines += random.sample(lines, linenum)
-    print("for {} common kmers, fill {} samples, "
-          "{} samples that can't be filled".format(len(inter_kmers),
-                                                   len(selected_lines),
-                                                   cnts))
-    print("for {} ratio_diff kmers, "
-          "{} samples that cant't be filled".format(len(ratio_kmer_diff),
-                                                    sum([round(totalline * kmer2ratios[kmer])
-                                                         for kmer in ratio_kmer_diff])))
+    print(
+        "for {} common kmers, fill {} samples, "
+        "{} samples that can't be filled".format(
+            len(inter_kmers), len(selected_lines), cnts
+        )
+    )
+    print(
+        "for {} ratio_diff kmers, "
+        "{} samples that cant't be filled".format(
+            len(ratio_kmer_diff),
+            sum([round(totalline * kmer2ratios[kmer]) for kmer in ratio_kmer_diff]),
+        )
+    )
     unfilled_cnt = totalline - len(selected_lines)
     print("totalline: {}, need to fill: {}".format(totalline, unfilled_cnt))
     if unfilled_cnt > 0 and len(unratioed_kmers) > 0:
-        minlinenum = int(math.ceil(float(unfilled_cnt)/len(unratioed_kmers)))
+        minlinenum = int(math.ceil(float(unfilled_cnt) / len(unratioed_kmers)))
         cnts = 0
         for kmer in unratioed_kmers:
             lines = kmer2lines[kmer]
@@ -517,7 +639,11 @@ def _rand_select_by_kmer_ratio(kmer2lines, kmer2ratios, totalline):
             else:
                 selected_lines += random.sample(lines, minlinenum)
                 cnts += minlinenum
-        print("extract {} samples from {} line_diff kmers".format(cnts, len(unratioed_kmers)))
+        print(
+            "extract {} samples from {} line_diff kmers".format(
+                cnts, len(unratioed_kmers)
+            )
+        )
     selected_lines = sorted(selected_lines)
     selected_lines = [-1] + selected_lines
     return selected_lines
@@ -525,16 +651,16 @@ def _rand_select_by_kmer_ratio(kmer2lines, kmer2ratios, totalline):
 
 # for balancing kmer distri in training samples ===
 def _write_randsel_lines(feafile, wfile, seled_lines):
-    wf = open(wfile, 'w')
+    wf = open(wfile, "w")
     with open(feafile) as rf:
         for i in range(1, len(seled_lines)):
-            chosen_line = ''
+            chosen_line = ""
             for j in range(0, seled_lines[i] - seled_lines[i - 1]):
                 # print(j)
                 chosen_line = next(rf)
             wf.write(chosen_line)
     wf.close()
-    print('_write_randsel_lines finished..')
+    print("_write_randsel_lines finished..")
 
 
 # balance kmer distri in neg_training file as pos_training file
@@ -559,7 +685,7 @@ def get_model_type_str(model_type, is_base, is_signallen):
 
 
 class SharedCounter(object):
-    """ A synchronized shared counter.
+    """A synchronized shared counter.
     The locking done by multiprocessing.Value ensures that only a single
     process or thread may read or write the in-memory ctypes object. However,
     in order to do n += 1, Python performs a read followed by a write, so a
@@ -571,22 +697,22 @@ class SharedCounter(object):
     """
 
     def __init__(self, n=0):
-        self.count = multiprocessing.Value('i', n)
+        self.count = multiprocessing.Value("i", n)
 
     def increment(self, n=1):
-        """ Increment the counter by n (default = 1) """
+        """Increment the counter by n (default = 1)"""
         with self.count.get_lock():
             self.count.value += n
 
     @property
     def value(self):
-        """ Return the value of the counter """
+        """Return the value of the counter"""
         return self.count.value
 
 
 # https://github.com/vterron/lemon/commit/9ca6b4b1212228dbd4f69b88aaf88b12952d7d6f
 class Queue(multiprocessing.queues.Queue):
-    """ A portable implementation of multiprocessing.Queue.
+    """A portable implementation of multiprocessing.Queue.
     Because of multithreading / multiprocessing semantics, Queue.qsize() may
     raise the NotImplementedError exception on Unix platforms like Mac OS X
     where sem_getvalue() is not implemented. This subclass addresses this
@@ -610,9 +736,9 @@ class Queue(multiprocessing.queues.Queue):
         return super(Queue, self).get(*args, **kwargs)
 
     def qsize(self) -> int:
-        """ Reliable implementation of multiprocessing.Queue.qsize() """
+        """Reliable implementation of multiprocessing.Queue.qsize()"""
         return self._size.value
 
     def empty(self) -> bool:
-        """ Reliable implementation of multiprocessing.Queue.empty() """
+        """Reliable implementation of multiprocessing.Queue.empty()"""
         return self.qsize() == 0
