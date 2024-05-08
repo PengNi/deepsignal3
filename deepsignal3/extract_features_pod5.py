@@ -41,7 +41,7 @@ from .utils.process_utils import _read_position_file
 LOGGER = get_logger(__name__)
 
 queue_size_border = 2000
-time_wait = 1
+time_wait = 0.1
 
 key_sep = "||"
 
@@ -198,7 +198,7 @@ def process_data(data,motif_seqs,positions,kmer_len,signals_len,methyloc=0,methy
     return features_list
 
 
-def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len,qsize_limit=4,time_wait=1):
+def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,signals_len, methyloc=0, methyl_label=1, qsize_limit=4):
     chunk=[]
     for filename in sig_dr:
         with pod5.Reader(filename) as reader:
@@ -215,10 +215,7 @@ def process_sig_seq(seq_index,sig_dr,feature_Q,motif_seqs,positions,kmer_len,sig
                         if seq is None:
                             continue
                         data=(signal,seq_read)
-                        feature_lists=process_data(data,motif_seqs,positions,kmer_len,signals_len)
-                        #chunk.append(feature_lists)
-                        #if len(chunk)>=r_batch_size:
-                        #print(len(feature_lists[0]),flush=True)
+                        feature_lists=process_data(data,motif_seqs,positions,kmer_len, signals_len, methyloc, methyl_label)
                         feature_Q.put(feature_lists)
                         chunk=[]               
                 except KeyError:
@@ -265,7 +262,8 @@ def extract_features(args):
     if nproc<len(pod5_dr):
         data=split_list(pod5_dr, nproc)
         for sig_data in data:
-            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,args.signal_len,
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len, 
+                                                            args.signal_len, args.mod_loc, args.methy_label,
                                                             args.r_batch_size),
                           name="reader")
             p_rf.daemon = True
@@ -274,7 +272,8 @@ def extract_features(args):
     else:
         data=split_list(pod5_dr, len(pod5_dr))
         for sig_data in data:
-            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,args.signal_len,
+            p_rf = mp.Process(target=process_sig_seq, args=(bam_index,sig_data, features_batch_q,motif_seqs,positions,args.seq_len,
+                                                            args.signal_len, args.mod_loc, args.methy_label,
                                                             args.r_batch_size),
                           name="reader")
             p_rf.daemon = True
