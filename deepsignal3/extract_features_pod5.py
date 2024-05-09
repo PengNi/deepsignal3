@@ -286,10 +286,7 @@ def process_sig_seq(
     norm_method="mad",
     nproc_extract=1,
 ):
-    # chunk = []
     while True:
-        if pod5s_q.empty():
-            time.sleep(time_wait)
         pod5_file = pod5s_q.get()
         if pod5_file == "kill":
             pod5s_q.put("kill")
@@ -319,13 +316,9 @@ def process_sig_seq(
                             norm_method,
                         )
                         feature_Q.put(feature_lists)
-                        # chunk = []
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    # if len(chunk) > 0:
-    #     feature_Q.put(chunk)
-    #     chunk = []
 
 
 def extract_features(args):
