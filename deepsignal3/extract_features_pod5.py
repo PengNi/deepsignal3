@@ -14,7 +14,6 @@ import argparse
 import time
 
 # import h5py
-import random
 import numpy as np
 import multiprocessing as mp
 
@@ -357,7 +356,7 @@ def extract_features(args):
 
     # pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
     pod5s_q = Queue()
-    fill_files_queue(pod5s_q, pod5_dr, args.r_batch_size)
+    fill_files_queue(pod5s_q, pod5_dr)
     pod5s_q.put("kill")
     features_batch_q = Queue()
     error_q = Queue()
@@ -573,14 +572,6 @@ def main():
         " with chromosome, position (in fwd strand), and strand. motifs/mod_loc are still "
         "need to be set. --positions is used to narrow down the range of the trageted "
         "motif locs. default None",
-    )
-    ep_extraction.add_argument(
-        "--r_batch_size",
-        action="store",
-        type=int,
-        default=50,
-        required=False,
-        help="number of files to be processed by each process one time, default 50",
     )
     ep_extraction.add_argument(
         "--pad_only_r",

@@ -282,7 +282,7 @@ def main():
         type=int,
         default=50,
         required=False,
-        help="number of files to be processed by each process one time, default 50",
+        help="number of files to be processed by each process one time, default 50. ONLE EFFECTIVE IN FAST5 EXTRACTION",
     )
     se_extraction.add_argument(
         "--pad_only_r",
@@ -404,7 +404,7 @@ def main():
         type=int,
         default=50,
         required=False,
-        help="number of files to be processed by each process one time, default 50",
+        help="number of files to be processed by each process one time, default 50. ONLE EFFECTIVE IN FAST5 EXTRACTION",
     )
     sc_input.add_argument("--bam", type=str, help="the bam filepath")
 
