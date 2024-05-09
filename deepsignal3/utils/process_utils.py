@@ -229,7 +229,7 @@ def normalize_signals(signals, normalize_method="mad"):
     return np.around(norm_signals, decimals=6)
 
 
-def fill_files_queue(files_q, files, batch_size, is_single=False):
+def fill_files_queue(files_q, files, batch_size=1, is_single=False):
     batch_size_tmp = 1 if not is_single else batch_size
     for i in np.arange(0, len(files), batch_size_tmp):
         files_q.put(files[i : (i + batch_size_tmp)])
