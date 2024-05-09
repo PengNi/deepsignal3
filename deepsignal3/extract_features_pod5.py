@@ -317,7 +317,7 @@ def process_sig_seq(
                         )
                         feature_Q.put(feature_lists)
                 except KeyError:
-                    LOGGER.warn("Read:%s not found in BAM file" % read_name, flush=True)
+                    LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
 
 
