@@ -28,6 +28,8 @@ from .utils.process_utils import display_args
 from .utils.process_utils import get_files
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
+from .utils.process_utils import fill_files_queue
+from .utils.process_utils import read_position_file
 
 from .utils import bam_reader
 
@@ -38,12 +40,11 @@ from .extract_features import _group_signals_by_movetable_v2
 from .extract_features import _get_signals_rect
 from .extract_features import _write_featurestr
 from .utils.process_utils import split_list
-from .utils.process_utils import _read_position_file
 from .utils.process_utils import normalize_signals
 
 LOGGER = get_logger(__name__)
 
-queue_size_border = 2000
+queue_size_border = 40
 time_wait = 0.1
 
 key_sep = "||"
@@ -110,13 +111,13 @@ def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
 
 
 ################utils###################
-def _read_position_file(position_file):
-    postions = set()
-    with open(position_file, "r") as rf:
-        for line in rf:
-            words = line.strip().split("\t")
-            postions.add(key_sep.join(words[:3]))
-    return postions
+# def _read_position_file(position_file):
+#     postions = set()
+#     with open(position_file, "r") as rf:
+#         for line in rf:
+#             words = line.strip().split("\t")
+#             postions.add(key_sep.join(words[:3]))
+#     return postions
 
 
 def _features_to_str(features):
@@ -276,7 +277,7 @@ def process_data(
 
 def process_sig_seq(
     seq_index,
-    sig_dr,
+    pod5s_q,
     feature_Q,
     motif_seqs,
     positions,
@@ -285,13 +286,18 @@ def process_sig_seq(
     methyloc=0,
     methyl_label=1,
     norm_method="mad",
-    qsize_limit=4,
 ):
-    chunk = []
-    for filename in sig_dr:
-        with pod5.Reader(filename) as reader:
+    # chunk = []
+    while True:
+        if pod5s_q.empty():
+            time.sleep(time_wait)
+        pod5_file = pod5s_q.get()
+        if pod5_file == "kill":
+            pod5s_q.put("kill")
+            break
+        with pod5.Reader(pod5_file[0]) as reader:
             for read_record in reader.reads():
-                if feature_Q.qsize() > qsize_limit:
+                if feature_Q.qsize() > queue_size_border:
                     time.sleep(time_wait)
                 read_name = str(read_record.read_id)
                 signal = read_record.signal
@@ -314,13 +320,13 @@ def process_sig_seq(
                             norm_method,
                         )
                         feature_Q.put(feature_lists)
-                        chunk = []
+                        # chunk = []
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    if len(chunk) > 0:
-        feature_Q.put(chunk)
-        chunk = []
+    # if len(chunk) > 0:
+    #     feature_Q.put(chunk)
+    #     chunk = []
 
 
 def extract_features(args):
@@ -342,7 +348,7 @@ def extract_features(args):
     LOGGER.info("read position file if it is not None")
     positions = None
     if args.positions is not None:
-        positions = _read_position_file(args.positions)
+        positions = read_position_file(args.positions)
     is_recursive = str2bool(args.recursively)
     is_dna = False if args.rna else True
     motif_seqs = get_motif_seqs(args.motifs, is_dna)
@@ -350,57 +356,80 @@ def extract_features(args):
     pod5_dr = get_files(input_dir, is_recursive, ".pod5")
 
     # pod5_dr=pod5.DatasetReader(input_dir, recursive=is_recursive)
+    pod5s_q = Queue()
+    fill_files_queue(pod5s_q, pod5_dr, args.r_batch_size)
+    pod5s_q.put("kill")
     features_batch_q = Queue()
     error_q = Queue()
     p_rfs = []
 
     nproc = args.nproc - 1
-    if nproc < len(pod5_dr):
-        data = split_list(pod5_dr, nproc)
-        for sig_data in data:
-            p_rf = mp.Process(
-                target=process_sig_seq,
-                args=(
-                    bam_index,
-                    sig_data,
-                    features_batch_q,
-                    motif_seqs,
-                    positions,
-                    args.seq_len,
-                    args.signal_len,
-                    args.mod_loc,
-                    args.methy_label,
-                    args.normalize_method,
-                    args.r_batch_size,
-                ),
-                name="reader",
-            )
-            p_rf.daemon = True
-            p_rf.start()
-            p_rfs.append(p_rf)
-    else:
-        data = split_list(pod5_dr, len(pod5_dr))
-        for sig_data in data:
-            p_rf = mp.Process(
-                target=process_sig_seq,
-                args=(
-                    bam_index,
-                    sig_data,
-                    features_batch_q,
-                    motif_seqs,
-                    positions,
-                    args.seq_len,
-                    args.signal_len,
-                    args.mod_loc,
-                    args.methy_label,
-                    args.normalize_method,
-                    args.r_batch_size,
-                ),
-                name="reader",
-            )
-            p_rf.daemon = True
-            p_rf.start()
-            p_rfs.append(p_rf)
+    for proc_idx in range(nproc):
+        p_rf = mp.Process(
+            target=process_sig_seq,
+            args=(
+                bam_index,
+                pod5s_q,
+                features_batch_q,
+                motif_seqs,
+                positions,
+                args.seq_len,
+                args.signal_len,
+                args.mod_loc,
+                args.methy_label,
+                args.normalize_method,
+            ),
+            name="extracter_{:03d}".format(proc_idx),
+        )
+        p_rf.daemon = True
+        p_rf.start()
+        p_rfs.append(p_rf)
+    # if nproc < len(pod5_dr):
+    #    data = split_list(pod5_dr, nproc)
+    #    for sig_data in data:
+    #        p_rf = mp.Process(
+    #            target=process_sig_seq,
+    #            args=(
+    #                bam_index,
+    #                sig_data,
+    #                features_batch_q,
+    #                motif_seqs,
+    #                positions,
+    #                args.seq_len,
+    #                args.signal_len,
+    #                args.mod_loc,
+    #                args.methy_label,
+    #                args.normalize_method,
+    #                args.r_batch_size,
+    #            ),
+    #            name="reader",
+    #        )
+    #        p_rf.daemon = True
+    #        p_rf.start()
+    #        p_rfs.append(p_rf)
+    # else:
+    #    data = split_list(pod5_dr, len(pod5_dr))
+    #    for sig_data in data:
+    #        p_rf = mp.Process(
+    #            target=process_sig_seq,
+    #            args=(
+    #                bam_index,
+    #                sig_data,
+    #                features_batch_q,
+    #                motif_seqs,
+    #                positions,
+    #                args.seq_len,
+    #                args.signal_len,
+    #                args.mod_loc,
+    #                args.methy_label,
+    #                args.normalize_method,
+    #                args.r_batch_size,
+    #            ),
+    #            name="reader",
+    #        )
+    #        p_rf.daemon = True
+    #        p_rf.start()
+    #        p_rfs.append(p_rf)
     # if nproc < 2:
     #    nproc = 2
 

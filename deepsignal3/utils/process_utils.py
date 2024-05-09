@@ -229,6 +229,13 @@ def normalize_signals(signals, normalize_method="mad"):
     return np.around(norm_signals, decimals=6)
 
 
+def fill_files_queue(files_q, files, batch_size, is_single=False):
+    batch_size_tmp = 1 if not is_single else batch_size
+    for i in np.arange(0, len(files), batch_size_tmp):
+        files_q.put(files[i : (i + batch_size_tmp)])
+    return
+
+
 # def get_refloc_of_methysite_in_motif(seqstr, motif='CG', methyloc_in_motif=0):
 #     """
 #
@@ -556,7 +563,7 @@ def split_list(data, num_chunks):
     return chunks
 
 
-def _read_position_file(position_file):
+def read_position_file(position_file):
     key_sep = "||"
     postions = set()
     with open(position_file, "r") as rf:

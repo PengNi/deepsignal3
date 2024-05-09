@@ -40,6 +40,8 @@ from .utils.process_utils import nproc_to_call_mods_in_cpu_mode
 from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
 from .utils.process_utils import get_files
+from .utils.process_utils import fill_files_queue
+from .utils.process_utils import read_position_file
 
 from .extract_features import _extract_preprocess
 
@@ -69,6 +71,7 @@ LOGGER = get_logger(__name__)
 os.environ["MKL_THREADING_LAYER"] = "GNU"
 
 queue_size_border = 2000
+qsize_size_border_p5batch = 40
 queue_size_border_f5batch = 100
 time_wait = 3
 
@@ -602,7 +605,7 @@ def _call_mods_from_fast5s_cpu2(
 
 
 def _call_mods_from_pod5_gpu(
-    pod5_dr, bam_index, success_file, model_path, motif_seqs, args
+    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
 ):
     nproc = args.nproc
     if use_cuda:
@@ -615,48 +618,71 @@ def _call_mods_from_pod5_gpu(
             nproc = 3
             nproc_dp = nproc - 2
     features_batch_q = Queue()
+    pod5s_q = Queue()
+    fill_files_queue(pod5s_q, pod5_dr, args.r_batch_size)
+    pod5s_q.put("kill")
     nproc_ex = nproc - nproc_dp - 1
     p_rfs = []
-    if nproc_ex < len(pod5_dr):
-        data = split_list(pod5_dr, nproc_ex)
-        for sig_data in data:
-            p_rf = mp.Process(
-                target=process_sig_seq,
-                args=(
-                    bam_index,
-                    sig_data,
-                    features_batch_q,
-                    motif_seqs,
-                    args.seq_len,
-                    args.signal_len,
-                    args.normalize_method,
-                    args.r_batch_size
-                ),
-                name="reader",
-            )
-            p_rf.daemon = True
-            p_rf.start()
-            p_rfs.append(p_rf)
-    else:
-        data = split_list(pod5_dr, len(pod5_dr))
-        for sig_data in data:
-            p_rf = mp.Process(
-                target=process_sig_seq,
-                args=(
-                    bam_index,
-                    sig_data,
-                    features_batch_q,
-                    motif_seqs,
-                    args.seq_len,
-                    args.signal_len,
-                    args.normalize_method,
-                    args.r_batch_size,
-                ),
-                name="reader",
-            )
-            p_rf.daemon = True
-            p_rf.start()
-            p_rfs.append(p_rf)
+    for proc_idx in range(nproc_ex):
+        p_rf = mp.Process(
+            target=process_sig_seq,
+            args=(
+                bam_index,
+                pod5s_q,
+                features_batch_q,
+                motif_seqs,
+                positions,
+                args.seq_len,
+                args.signal_len,
+                args.mod_loc,
+                args.methy_label,
+                args.normalize_method,
+            ),
+            name="extracter_{:03d}".format(proc_idx),
+        )
+        p_rf.daemon = True
+        p_rf.start()
+        p_rfs.append(p_rf)
+    # if nproc_ex < len(pod5_dr):
+    #     data = split_list(pod5_dr, nproc_ex)
+    #     for sig_data in data:
+    #         p_rf = mp.Process(
+    #             target=process_sig_seq,
+    #             args=(
+    #                 bam_index,
+    #                 sig_data,
+    #                 features_batch_q,
+    #                 motif_seqs,
+    #                 args.seq_len,
+    #                 args.signal_len,
+    #                 args.normalize_method,
+    #                 args.r_batch_size
+    #             ),
+    #             name="reader",
+    #         )
+    #         p_rf.daemon = True
+    #         p_rf.start()
+    #         p_rfs.append(p_rf)
+    # else:
+    #     data = split_list(pod5_dr, len(pod5_dr))
+    #     for sig_data in data:
+    #         p_rf = mp.Process(
+    #             target=process_sig_seq,
+    #             args=(
+    #                 bam_index,
+    #                 sig_data,
+    #                 features_batch_q,
+    #                 motif_seqs,
+    #                 args.seq_len,
+    #                 args.signal_len,
+    #                 args.normalize_method,
+    #                 args.r_batch_size,
+    #             ),
+    #             name="reader",
+    #         )
+    #         p_rf.daemon = True
+    #         p_rf.start()
+    #         p_rfs.append(p_rf)
 
     pred_str_q = Queue()
 
@@ -712,7 +738,15 @@ def _get_gpus():
     return gpulist * 1000
 
 
-def process_data(data, motif_seqs, kmer_len, signals_len, methyloc=0, methy_label=1,norm_method='mad'):
+def process_data(
+    data,
+    motif_seqs,
+    kmer_len,
+    signals_len,
+    methyloc=0,
+    methy_label=1,
+    norm_method="mad",
+):
     if kmer_len % 2 == 0:
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
@@ -728,10 +762,10 @@ def process_data(data, motif_seqs, kmer_len, signals_len, methyloc=0, methy_labe
     else:
         signal_trimmed = (signal[:num_trimmed] - norm_shift) / norm_scale
     norm_signals = normalize_signals(signal_trimmed, norm_method)
-    #sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
-    #if sscale == 0.0:
+    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    # if sscale == 0.0:
     #    norm_signals = signal_trimmed
-    #else:
+    # else:
     #    norm_signals = (signal_trimmed - sshift) / sscale
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
@@ -828,21 +862,26 @@ def process_data(data, motif_seqs, kmer_len, signals_len, methyloc=0, methy_labe
 
 def process_sig_seq(
     seq_index,
-    sig_dr,
+    pod5s_q,
     feature_Q,
     motif_seqs,
     kmer_len,
     signals_len,
-    norm_method='mad',
-    r_batch_size=10,
-    qsize_limit=4,
-    time_wait=1,
+    methyloc=0,
+    methyl_label=1,
+    norm_method="mad",
 ):
-    chunk = []
-    for filename in sig_dr:
-        with pod5.Reader(filename) as reader:
+    # chunk = []
+    while True:
+        if pod5s_q.empty():
+            time.sleep(time_wait)
+        pod5_file = pod5s_q.get()
+        if pod5_file == "kill":
+            pod5s_q.put("kill")
+            break
+        with pod5.Reader(pod5_file[0]) as reader:
             for read_record in reader.reads():
-                if feature_Q.qsize() > qsize_limit:
+                if feature_Q.qsize() > qsize_size_border_p5batch:
                     time.sleep(time_wait)
                 read_name = str(read_record.read_id)
                 signal = read_record.signal
@@ -855,19 +894,25 @@ def process_sig_seq(
                             continue
                         data = (signal, seq_read)
                         feature_lists = process_data(
-                            data, motif_seqs, kmer_len, signals_len,norm_method
+                            data,
+                            motif_seqs,
+                            kmer_len,
+                            signals_len,
+                            methyloc,
+                            methyl_label,
+                            norm_method,
                         )
                         # chunk.append(feature_lists)
                         # if len(chunk)>=r_batch_size:
                         # print(len(feature_lists[0]),flush=True)
                         feature_Q.put(feature_lists)
-                        chunk = []
+                        # chunk = []
                 except KeyError:
                     LOGGER.info("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    if len(chunk) > 0:
-        feature_Q.put(chunk)
-        chunk = []
+    # if len(chunk) > 0:
+    #     feature_Q.put(chunk)
+    #     chunk = []
 
 
 def call_mods(args):
@@ -896,11 +941,20 @@ def call_mods(args):
             # pod5_dr=pod5.DatasetReader(input_path, recursive=is_recursive)
             LOGGER.info("parse the motifs string")
             motif_seqs = get_motif_seqs(args.motifs, is_dna)
+            positions = None
+            if args.positions is not None:
+                positions = read_position_file(args.positions)
 
             # ctx_fork = mp.get_context('fork')
             pod5_dr = pod5_dr = get_files(input_path, is_recursive, ".pod5")
             _call_mods_from_pod5_gpu(
-                pod5_dr, bam_index, success_file, model_path, motif_seqs, args
+                pod5_dr,
+                bam_index,
+                success_file,
+                model_path,
+                motif_seqs,
+                positions,
+                args,
             )
 
         else:

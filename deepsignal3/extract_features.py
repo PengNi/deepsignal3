@@ -30,6 +30,8 @@ from .utils.process_utils import get_refloc_of_methysite_in_motif
 from .utils.process_utils import get_motif_seqs
 from .utils.process_utils import complement_seq
 from .utils.process_utils import normalize_signals
+from .utils.process_utils import fill_files_queue
+from .utils.process_utils import read_position_file
 
 from .utils.ref_reader import get_contig2len
 from .utils.ref_reader import get_contig2len_n_seq
@@ -571,22 +573,6 @@ def _write_featurestr(write_fp, featurestr_q, w_batch_num=10000, is_dir=False):
 # =======================================================================================
 
 
-def _fill_files_queue(fast5s_q, fast5_files, batch_size, is_single=False):
-    batch_size_tmp = 1 if not is_single else batch_size
-    for i in np.arange(0, len(fast5_files), batch_size_tmp):
-        fast5s_q.put(fast5_files[i : (i + batch_size_tmp)])
-    return
-
-
-def _read_position_file(position_file):
-    postions = set()
-    with open(position_file, "r") as rf:
-        for line in rf:
-            words = line.strip().split("\t")
-            postions.add(key_sep.join(words[:3]))
-    return postions
-
-
 def check_basecallgroup(fast5_fn, basecall_group, basecall_subgroup, is_single=False):
     if is_single:
         fast5read = fast5_reader.SingleFast5(fast5_fn, is_single)
@@ -644,10 +630,10 @@ def _extract_preprocess(
     LOGGER.info("read position file if it is not None")
     positions = None
     if position_file is not None:
-        positions = _read_position_file(position_file)
+        positions = read_position_file(position_file)
 
     fast5s_q = Queue()
-    _fill_files_queue(fast5s_q, fast5_files, f5_batch_num, args.single)
+    fill_files_queue(fast5s_q, fast5_files, f5_batch_num, args.single)
 
     return motif_seqs, chrom2len, fast5s_q, len(fast5_files), positions, contigs
 
