@@ -881,7 +881,7 @@ def process_sig_seq(
             break
         with pod5.Reader(pod5_file[0]) as reader:
             for read_record in reader.reads():
-                if feature_Q.qsize() > qsize_size_border_p5batch:
+                while feature_Q.qsize() > qsize_size_border_p5batch:
                     time.sleep(time_wait)
                 read_name = str(read_record.read_id)
                 signal = read_record.signal
