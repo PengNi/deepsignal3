@@ -75,6 +75,7 @@ Example data, including training data and test data, can be downloaded from ([go
 To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
 
 Demo commands of using Dorado and deepsignal3 to call 5mC from POD5 files:
+
 ```bash
 # 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
@@ -84,6 +85,7 @@ deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.c
 ```
 
 Demo commands of using Guppy and deepsignal3 to call 5mC from FAST5 files:
+
 ```bash
 # Higher versions of Guppy no longer support the output format fast5
 # Download and unzip the example data and pre-trained models.
@@ -222,18 +224,18 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The following table shows the correlations with resutls of WGBS:
+The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The Dorado version for comparison is dna_r10.4.1_e8.2_400bps_sup@v4.1.0. The following table shows the correlations with resutls of WGBS:
 
-|   method   | pearson | rsquare | spearman |  RMSE  |    mean_coverage    |
-| :--------: | :-----: | :-----: | :------: | :----: | :----------------: |
-| deepsignal | 0.9307  | 0.8662  |  0.8673  | 0.1413 | 4.5607 |
-|   dorado   | 0.9229  | 0.8518  |  0.8687  | 0.1465 | 4.2188  |
+|   method   | pearson | rsquare | spearman |  RMSE  | mean_coverage |
+| :--------: | :-----: | :-----: | :------: | :----: | :-----------: |
+| deepsignal | 0.9307  | 0.8662  |  0.8673  | 0.1413 |    4.5607     |
+|   dorado   | 0.9229  | 0.8518  |  0.8687  | 0.1465 |    4.2188     |
 
 The following table shows the read-level performance：
 
 |   method   |   TP    |   FN   |   TN    |   FP   | accuracy | recall | specificity | precision |
 | :--------: | :-----: | :----: | :-----: | :----: | :------: | :----: | :---------: | :-------: |
-| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.9760   | 0.9709 |    0.9810    |  0.9808   |
+| deepsignal | 97094.4 | 2905.6 | 98097.0 | 1903.0 |  0.9760  | 0.9709 |   0.9810    |  0.9808   |
 |   dorado   | 93991.4 | 6008.6 | 99265.8 | 734.2  |  0.9663  | 0.9399 |   0.9927    |  0.9922   |
 
 ## Appendix
