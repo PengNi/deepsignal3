@@ -189,7 +189,7 @@ The modification_frequency file can be either saved in [bedMethyl](https://www.e
 
 Features of targeted sites can be extracted for training or testing.
 
-For the example data, deepsignal3 extracts 13-mer-seq and 13\*15-signal features of each CpG motif in reads by default.:
+For the example data, deepsignal3 extracts 21-mer-seq and 21\*16-signal features of each CpG motif in reads by default.:
 
 ```bash
 deepsignal3 --pod5 extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
