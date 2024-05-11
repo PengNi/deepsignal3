@@ -10,6 +10,9 @@ import math
 import logging
 import re
 from statsmodels import robust
+import time
+
+time_wait = 0.1
 
 basepairs = {
     "A": "T",
@@ -571,6 +574,69 @@ def read_position_file(position_file):
             words = line.strip().split("\t")
             postions.add(key_sep.join(words[:3]))
     return postions
+
+
+LOGGER = get_logger(__name__)
+
+
+def _write_featurestr_to_file(write_fp, featurestr_q):
+    LOGGER.info("write_process-{} starts".format(os.getpid()))
+    with open(write_fp, "w") as wf:
+        while True:
+            # during test, it's ok without the sleep(time_wait)
+            if featurestr_q.empty():
+                time.sleep(time_wait)
+                continue
+            features_str = featurestr_q.get()
+            if features_str == "kill":
+                LOGGER.info("write_process-{} finished".format(os.getpid()))
+                break
+            for one_features_str in features_str:
+                wf.write(one_features_str + "\n")
+            wf.flush()
+
+
+def _write_featurestr_to_dir(write_dir, featurestr_q, w_batch_num):
+    LOGGER.info("write_process-{} starts".format(os.getpid()))
+    if os.path.exists(write_dir):
+        if os.path.isfile(write_dir):
+            raise FileExistsError(
+                "{} already exists as a file, please use another write_dir".format(
+                    write_dir
+                )
+            )
+    else:
+        os.makedirs(write_dir)
+
+    file_count = 0
+    wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
+    batch_count = 0
+    while True:
+        # during test, it's ok without the sleep(time_wait)
+        if featurestr_q.empty():
+            time.sleep(time_wait)
+            continue
+        features_str = featurestr_q.get()
+        if features_str == "kill":
+            LOGGER.info("write_process-{} finished".format(os.getpid()))
+            break
+
+        if batch_count >= w_batch_num:
+            wf.flush()
+            wf.close()
+            file_count += 1
+            wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
+            batch_count = 0
+        for one_features_str in features_str:
+            wf.write(one_features_str + "\n")
+        batch_count += 1
+
+
+def write_featurestr(write_fp, featurestr_q, w_batch_num=10000, is_dir=False):
+    if is_dir:
+        _write_featurestr_to_dir(write_fp, featurestr_q, w_batch_num)
+    else:
+        _write_featurestr_to_file(write_fp, featurestr_q)
 
 
 # for balancing kmer distri in training samples ===

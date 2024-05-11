@@ -37,7 +37,8 @@ from .utils.process_utils import get_logger
 import pod5
 from .extract_features import _group_signals_by_movetable_v2
 from .extract_features import _get_signals_rect
-from .extract_features import _write_featurestr
+from .utils.process_utils import write_featurestr
+
 # from .utils.process_utils import split_list
 from .utils.process_utils import normalize_signals
 
@@ -293,7 +294,9 @@ def process_sig_seq(
             break
         with pod5.Reader(pod5_file[0]) as reader:
             for read_record in reader.reads():
-                while feature_Q.qsize() > (nproc_extract if nproc_extract > 1 else 2) * 3:
+                while (
+                    feature_Q.qsize() > (nproc_extract if nproc_extract > 1 else 2) * 3
+                ):
                     time.sleep(time_wait)
                 read_name = str(read_record.read_id)
                 signal = read_record.signal
@@ -378,7 +381,7 @@ def extract_features(args):
         p_rfs.append(p_rf)
 
     p_w = mp.Process(
-        target=_write_featurestr,
+        target=write_featurestr,
         args=(
             args.write_path,
             features_batch_q,

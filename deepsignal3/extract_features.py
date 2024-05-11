@@ -32,6 +32,7 @@ from .utils.process_utils import complement_seq
 from .utils.process_utils import normalize_signals
 from .utils.process_utils import fill_files_queue
 from .utils.process_utils import read_position_file
+from .utils.process_utils import write_featurestr
 
 from .utils.ref_reader import get_contig2len
 from .utils.ref_reader import get_contig2len_n_seq
@@ -53,7 +54,7 @@ from .utils.process_utils import get_logger
 LOGGER = get_logger(__name__)
 
 queue_size_border = 2000
-time_wait = 3
+time_wait = 0.1
 
 key_sep = "||"
 
@@ -508,66 +509,6 @@ def _features_to_str(features):
             str(gc_content),
         ]
     )
-
-
-def _write_featurestr_to_file(write_fp, featurestr_q):
-    LOGGER.info("write_process-{} starts".format(os.getpid()))
-    with open(write_fp, "w") as wf:
-        while True:
-            # during test, it's ok without the sleep(time_wait)
-            if featurestr_q.empty():
-                time.sleep(time_wait)
-                continue
-            features_str = featurestr_q.get()
-            if features_str == "kill":
-                LOGGER.info("write_process-{} finished".format(os.getpid()))
-                break
-            for one_features_str in features_str:
-                wf.write(one_features_str + "\n")
-            wf.flush()
-
-
-def _write_featurestr_to_dir(write_dir, featurestr_q, w_batch_num):
-    LOGGER.info("write_process-{} starts".format(os.getpid()))
-    if os.path.exists(write_dir):
-        if os.path.isfile(write_dir):
-            raise FileExistsError(
-                "{} already exists as a file, please use another write_dir".format(
-                    write_dir
-                )
-            )
-    else:
-        os.makedirs(write_dir)
-
-    file_count = 0
-    wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
-    batch_count = 0
-    while True:
-        # during test, it's ok without the sleep(time_wait)
-        if featurestr_q.empty():
-            time.sleep(time_wait)
-            continue
-        features_str = featurestr_q.get()
-        if features_str == "kill":
-            LOGGER.info("write_process-{} finished".format(os.getpid()))
-            break
-
-        if batch_count >= w_batch_num:
-            wf.flush()
-            wf.close()
-            file_count += 1
-            wf = open("/".join([write_dir, str(file_count) + ".tsv"]), "w")
-            batch_count = 0
-        for one_features_str in features_str:
-            wf.write(one_features_str + "\n")
-        batch_count += 1
-
-
-def _write_featurestr(write_fp, featurestr_q, w_batch_num=10000, is_dir=False):
-    if is_dir:
-        _write_featurestr_to_dir(write_fp, featurestr_q, w_batch_num)
-    else:
-        _write_featurestr_to_file(write_fp, featurestr_q)
 
 
 # =======================================================================================
@@ -1432,7 +1373,7 @@ def extract_features(args):
     )
 
     p_w = mp.Process(
-        target=_write_featurestr,
+        target=write_featurestr,
         args=(args.write_path, features_q, args.w_batch_num, str2bool(args.w_is_dir)),
         name="writer",
     )
