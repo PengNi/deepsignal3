@@ -224,7 +224,7 @@ deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/f
 
 ## Result
 
-The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The Dorado version for comparison is dna_r10.4.1_e8.2_400bps_sup@v4.1.0. The following table shows the correlations with resutls of WGBS:
+The following table shows the results of 5mCpG calling from publicly avaiable HG002 (R10.4.1) data ([ONT Open Datasets](https://labs.epi2me.io/askenazi-kit14-2022-12/)). The Dorado version for comparison is 0.3.4 and the model version is dna_r10.4.1_e8.2_400bps_sup@v4.1.0. The following table shows the correlations with resutls of WGBS:
 
 |   method   | pearson | rsquare | spearman |  RMSE  | mean_coverage |
 | :--------: | :-----: | :-----: | :------: | :----: | :-----------: |
