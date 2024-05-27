@@ -167,21 +167,21 @@ def generate_aligner_with_options(
 log_fmt = "%(asctime)s - %(levelname)s - %(message)s"
 log_datefmt = "%Y-%m-%d %H:%M:%S"
 log_formatter = logging.Formatter(log_fmt, log_datefmt)
-LOG_FN = "deepsignal3.log"
+# LOG_FN = "deepsignal3.log"
 
 
 def get_logger(module="", level=logging.INFO):
     logger = logging.getLogger(module)
     logger.setLevel(level)
 
-    fh = logging.FileHandler(LOG_FN)
-    fh.setLevel(level)
-    fh.setFormatter(log_formatter)
+    # fh = logging.FileHandler(LOG_FN)
+    # fh.setLevel(level)
+    # fh.setFormatter(log_formatter)
     sh = logging.StreamHandler()
     sh.setLevel(level)
     sh.setFormatter(log_formatter)
 
-    logger.addHandler(fh)
+    # logger.addHandler(fh)
     logger.addHandler(sh)
     return logger
 
