@@ -182,18 +182,10 @@ def process_data(
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
     num_trimmed = read_dict["ts"]
-    norm_shift = read_dict["sm"]
-    norm_scale = read_dict["sd"]
-    if num_trimmed >= 0:
-        signal_trimmed = (signal[num_trimmed:] - norm_shift) / norm_scale
-    else:
-        signal_trimmed = (signal[:num_trimmed] - norm_shift) / norm_scale
+    # norm_shift = read_dict["sm"]
+    # norm_scale = read_dict["sd"]
+    signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
-    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
-    # if sscale == 0.0:
-    #    norm_signals = signal_trimmed
-    # else:
-    #    norm_signals = (signal_trimmed - sshift) / sscale
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)

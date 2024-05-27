@@ -4,7 +4,6 @@ import os
 import numpy as np
 
 from .utils.process_utils import base2code_dna
-import pywt
 
 
 def clear_linecache():
