@@ -721,11 +721,7 @@ def process_data(
     # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
-    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
-    # if sscale == 0.0:
-    #    norm_signals = signal_trimmed
-    # else:
-    #    norm_signals = (signal_trimmed - sshift) / sscale
+    
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
@@ -835,7 +831,7 @@ def process_sig_seq(
     methyl_label=1,
     norm_method="mad",
 ):
-    # chunk = []
+    
     while True:
         while pod5s_q.empty():
             time.sleep(time_wait)
@@ -867,17 +863,13 @@ def process_sig_seq(
                             methyl_label,
                             norm_method,
                         )
-                        # chunk.append(feature_lists)
-                        # if len(chunk)>=r_batch_size:
-                        # print(len(feature_lists[0]),flush=True)
+                        
                         feature_Q.put(feature_lists)
-                        # chunk = []
+                        
                 except KeyError:
                     LOGGER.info("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    # if len(chunk) > 0:
-    #     feature_Q.put(chunk)
-    #     chunk = []
+    
 
 
 def call_mods(args):
