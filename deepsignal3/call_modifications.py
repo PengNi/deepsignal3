@@ -73,8 +73,8 @@ os.environ["MKL_THREADING_LAYER"] = "GNU"
 queue_size_border = 2000
 qsize_size_border_p5batch = 40
 queue_size_border_f5batch = 100
-time_wait = 3
-
+time_wait = 0.1
+key_sep = "||"
 
 def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
     """
@@ -643,6 +643,7 @@ def _call_mods_from_pod5_gpu(
         p_rf.daemon = True
         p_rf.start()
         p_rfs.append(p_rf)
+    
 
     pred_str_q = Queue()
 
@@ -701,6 +702,7 @@ def _get_gpus():
 def process_data(
     data,
     motif_seqs,
+    positions,
     kmer_len,
     signals_len,
     methyloc=0,
@@ -719,6 +721,11 @@ def process_data(
     # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
+    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    # if sscale == 0.0:
+    #    norm_signals = signal_trimmed
+    # else:
+    #    norm_signals = (signal_trimmed - sshift) / sscale
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
@@ -743,7 +750,7 @@ def process_data(
         )
     else:
         LOGGER.info(
-            "Temporarily do not recommend using umapped read {}".format(
+            "Temporarily do not recommend using unmapped read {}".format(
                 seq_read.query_name
             )
         )
@@ -788,6 +795,10 @@ def process_data(
                 ref_name = "."
             else:
                 ref_name = seq_read.reference_name
+            if (positions is not None) and (
+                key_sep.join([ref_name, str(ref_pos), strand]) not in positions
+            ):
+                continue
             sampleinfo.append(
                 "\t".join(
                     [ref_name, str(ref_pos), "t", ".", seq_read.query_name, strand]
@@ -817,6 +828,7 @@ def process_sig_seq(
     pod5s_q,
     feature_Q,
     motif_seqs,
+    positions,
     kmer_len,
     signals_len,
     methyloc=0,
@@ -825,7 +837,7 @@ def process_sig_seq(
 ):
     # chunk = []
     while True:
-        if pod5s_q.empty():
+        while pod5s_q.empty():
             time.sleep(time_wait)
         pod5_file = pod5s_q.get()
         if pod5_file == "kill":
@@ -848,16 +860,24 @@ def process_sig_seq(
                         feature_lists = process_data(
                             data,
                             motif_seqs,
+                            positions,
                             kmer_len,
                             signals_len,
                             methyloc,
                             methyl_label,
                             norm_method,
                         )
+                        # chunk.append(feature_lists)
+                        # if len(chunk)>=r_batch_size:
+                        # print(len(feature_lists[0]),flush=True)
                         feature_Q.put(feature_lists)
+                        # chunk = []
                 except KeyError:
                     LOGGER.info("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
+    # if len(chunk) > 0:
+    #     feature_Q.put(chunk)
+    #     chunk = []
 
 
 def call_mods(args):
