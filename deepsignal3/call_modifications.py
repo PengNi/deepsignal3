@@ -854,17 +854,10 @@ def process_sig_seq(
                             methyl_label,
                             norm_method,
                         )
-                        # chunk.append(feature_lists)
-                        # if len(chunk)>=r_batch_size:
-                        # print(len(feature_lists[0]),flush=True)
                         feature_Q.put(feature_lists)
-                        # chunk = []
                 except KeyError:
                     LOGGER.info("Read:%s not found in BAM file" % read_name, flush=True)
                     continue
-    # if len(chunk) > 0:
-    #     feature_Q.put(chunk)
-    #     chunk = []
 
 
 def call_mods(args):
