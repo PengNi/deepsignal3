@@ -721,7 +721,6 @@ def process_data(
     # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
-    
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
@@ -831,7 +830,6 @@ def process_sig_seq(
     methyl_label=1,
     norm_method="mad",
 ):
-    
     while True:
         while pod5s_q.empty():
             time.sleep(time_wait)
@@ -865,11 +863,9 @@ def process_sig_seq(
                         )
                         
                         feature_Q.put(feature_lists)
-                        
                 except KeyError:
-                    LOGGER.info("Read:%s not found in BAM file" % read_name, flush=True)
+                    LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
-    
 
 
 def call_mods(args):
@@ -913,7 +909,6 @@ def call_mods(args):
                 positions,
                 args,
             )
-
         else:
             read_strand = _get_read_sequened_strand(args.basecall_subgroup)
             motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs = (
