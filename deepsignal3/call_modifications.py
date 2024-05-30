@@ -830,6 +830,7 @@ def process_sig_seq(
     methyl_label=1,
     norm_method="mad",
 ):
+    LOGGER.info("extract_features process-{} starts".format(os.getpid()))
     while True:
         while pod5s_q.empty():
             time.sleep(time_wait)
@@ -866,6 +867,7 @@ def process_sig_seq(
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
+    LOGGER.info("extract_features process-{} ending".format(os.getpid()))
 
 
 def call_mods(args):
