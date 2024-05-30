@@ -279,6 +279,7 @@ def process_sig_seq(
     norm_method="mad",
     nproc_extract=1,
 ):
+    LOGGER.info("extract_features process-{} starts".format(os.getpid()))
     while True:
         pod5_file = pod5s_q.get()
         if pod5_file == "kill":
@@ -314,6 +315,7 @@ def process_sig_seq(
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
+    LOGGER.info("extract_features process-{} finished".format(os.getpid()))
 
 
 def extract_features(args):
