@@ -796,7 +796,7 @@ def process_data(
                 continue
             sampleinfo.append(
                 "\t".join(
-                    [ref_name, str(ref_pos), "t", ".", seq_read.query_name, strand]
+                    [ref_name, str(ref_pos), strand, ".", seq_read.query_name, "."]
                 )
             )
             kmers.append(k_seq)
