@@ -722,8 +722,8 @@ def process_data(
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
     num_trimmed = read_dict["ts"]
-    #norm_shift = read_dict["sm"]
-    #norm_scale = read_dict["sd"]
+    # norm_shift = read_dict["sm"]
+    # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
     seq = seq_read.get_forward_sequence()
@@ -1316,23 +1316,23 @@ def main():
     p_mapping.add_argument(
         "--mapq",
         type=int,
-        default=10,
+        default=1,
         required=False,
-        help="MAPping Quality cutoff for selecting alignment items, default 10",
+        help="MAPping Quality cutoff for selecting alignment items, default 1",
     )
     p_mapping.add_argument(
         "--identity",
         type=float,
-        default=0.75,
+        default=0.0,
         required=False,
-        help="identity cutoff for selecting alignment items, default 0.75",
+        help="identity cutoff for selecting alignment items, default 0.0",
     )
     p_mapping.add_argument(
         "--coverage_ratio",
         type=float,
-        default=0.75,
+        default=0.50,
         required=False,
-        help="percent of coverage, read alignment len against read len, default 0.75",
+        help="percent of coverage, read alignment len against read len, default 0.50",
     )
     p_mapping.add_argument(
         "--best_n",

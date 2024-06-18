@@ -535,23 +535,23 @@ def main():
     ep_mapping.add_argument(
         "--mapq",
         type=int,
-        default=10,
+        default=1,
         required=False,
-        help="MAPping Quality cutoff for selecting alignment items, default 10",
+        help="MAPping Quality cutoff for selecting alignment items, default 1",
     )
     ep_mapping.add_argument(
         "--identity",
         type=float,
-        default=0.75,
+        default=0.0,
         required=False,
-        help="identity cutoff for selecting alignment items, default 0.75",
+        help="identity cutoff for selecting alignment items, default 0.0",
     )
     ep_mapping.add_argument(
         "--coverage_ratio",
         type=float,
-        default=0.75,
+        default=0.50,
         required=False,
-        help="percent of coverage, read alignment len against read len, default 0.75",
+        help="percent of coverage, read alignment len against read len, default 0.50",
     )
     ep_mapping.add_argument(
         "--best_n",
