@@ -238,7 +238,7 @@ def main():
         type=int,
         required=False,
         default=16,
-        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+        help="the number of signals of one base to be used in deepsignal, default 15",
     )
     se_extraction.add_argument(
         "--motifs",
@@ -445,9 +445,9 @@ def main():
     sc_call.add_argument(
         "--signal_len",
         type=int,
-        default=16,
+        default=15,
         required=False,
-        help="signal num of one base, default 16",
+        help="signal num of one base, default 15",
     )
 
     # model param
@@ -767,9 +767,9 @@ def main():
     st_train.add_argument(
         "--signal_len",
         type=int,
-        default=16,
+        default=15,
         required=False,
-        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+        help="the number of signals of one base to be used in deepsignal, default 15",
     )
     # model param
     st_train.add_argument(
@@ -918,9 +918,9 @@ def main():
     sd_train.add_argument(
         "--signal_len",
         type=int,
-        default=16,
+        default=15,
         required=False,
-        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+        help="the number of signals of one base to be used in deepsignal, default 15",
     )
     # # model param
     sd_train.add_argument(

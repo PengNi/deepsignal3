@@ -1085,9 +1085,9 @@ def main():
     p_call.add_argument(
         "--signal_len",
         type=int,
-        default=16,
+        default=15,
         required=False,
-        help="signal num of one base, default 16",
+        help="signal num of one base, default 15",
     )
 
     # model param

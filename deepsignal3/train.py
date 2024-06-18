@@ -2231,9 +2231,9 @@ def main():
     parser.add_argument(
         "--signal_len",
         type=int,
-        default=16,
+        default=15,
         required=False,
-        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+        help="the number of signals of one base to be used in deepsignal, default 15",
     )
 
     # model param

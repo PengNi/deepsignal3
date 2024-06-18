@@ -476,8 +476,8 @@ def main():
         action="store",
         type=int,
         required=False,
-        default=16,
-        help="the number of signals of one base to be used in deepsignal_plant, default 16",
+        default=15,
+        help="the number of signals of one base to be used in deepsignal, default 15",
     )
     ep_extraction.add_argument(
         "--motifs",

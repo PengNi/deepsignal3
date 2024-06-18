@@ -16,8 +16,9 @@ from sklearn.metrics import roc_auc_score
 from txt_formater import ModRecord
 
 
-num_sites = [100000, ]
-prob_cfs = numpy.arange(0, 0.70, 0.025)
+num_sites = [1000, 10000, 100000, ]
+# prob_cfs = numpy.arange(0, 0.70, 0.025)
+prob_cfs = [0,]
 CallRecord = namedtuple('CallRecord', ['key', 'predicted_label', 'is_true_methylated',
                                        'prob0', 'prob1'])
 
