@@ -223,6 +223,17 @@ def process_data(
                             ref_pos = ref_start + q_to_r_poss[offset_idx]
                 else:
                     continue
+            
+            if seq_read.reference_name is None:
+                ref_name = "."
+            else:
+                ref_name = seq_read.reference_name
+            # sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
+            if (positions is not None) and (
+                key_sep.join([ref_name, str(ref_pos), strand]) not in positions
+            ):
+                continue
+            
             k_mer = seq[(loc_in_read - num_bases) : (loc_in_read + num_bases + 1)]
             # k_seq=[base2code_dna[x] for x in k_mer]
             k_signals = signal_group[
@@ -235,15 +246,6 @@ def process_data(
 
             signal_means = [np.mean(x) for x in k_signals]
             signal_stds = [np.std(x) for x in k_signals]
-            if seq_read.reference_name is None:
-                ref_name = "."
-            else:
-                ref_name = seq_read.reference_name
-            # sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
-            if (positions is not None) and (
-                key_sep.join([ref_name, str(ref_pos), strand]) not in positions
-            ):
-                continue
 
             features_list.append(
                 _features_to_str(
