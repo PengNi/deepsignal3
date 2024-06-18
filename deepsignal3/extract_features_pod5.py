@@ -208,6 +208,10 @@ def process_data(
         q_to_r_poss = get_q2tloc_from_cigar(
             cigar_tuples, strand_code, (seq_end - seq_start)
         )
+    if seq_read.reference_name is None:
+        ref_name = "."
+    else:
+        ref_name = seq_read.reference_name
     for loc_in_read in tsite_locs:
         if num_bases <= loc_in_read < len(seq) - num_bases:
             ref_pos = -1
@@ -223,17 +227,12 @@ def process_data(
                             ref_pos = ref_start + q_to_r_poss[offset_idx]
                 else:
                     continue
-            
-            if seq_read.reference_name is None:
-                ref_name = "."
-            else:
-                ref_name = seq_read.reference_name
-            # sampleinfo='\t'.join([ref_name,str(pos) , 't', '.', seq_read.query_name, strand])
+
             if (positions is not None) and (
                 key_sep.join([ref_name, str(ref_pos), strand]) not in positions
             ):
                 continue
-            
+
             k_mer = seq[(loc_in_read - num_bases) : (loc_in_read + num_bases + 1)]
             # k_seq=[base2code_dna[x] for x in k_mer]
             k_signals = signal_group[
