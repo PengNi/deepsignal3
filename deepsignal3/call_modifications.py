@@ -219,9 +219,7 @@ def _read_features_file(features_file, features_batch_q, r_batch_size=10):
 def _call_mods(features_batch, model, batch_size, device=0):
     # features_batch: 1. if from _read_features_file(), has 1 * args.batch_size samples (not any more, modified)
     # --------------: 2. if from _read_features_from_fast5s(), has uncertain number of samples
-    sampleinfo, kmers, base_means, base_stds, base_signal_lens, k_signals, labels = (
-        features_batch
-    )
+    sampleinfo, kmers, base_means, base_stds, base_signal_lens, k_signals, labels = features_batch
     labels = np.reshape(labels, (len(labels)))
 
     pred_str = []
@@ -238,7 +236,7 @@ def _call_mods(features_batch, model, batch_size, device=0):
         b_k_signals = k_signals[batch_s:batch_e]
         b_labels = labels[batch_s:batch_e]
         if len(b_sampleinfo) > 0:
-            voutputs, vlogits = model(
+            _, vlogits = model(
                 FloatTensor(b_kmers, device),
                 FloatTensor(b_base_means, device),
                 FloatTensor(b_base_stds, device),
@@ -713,12 +711,13 @@ def process_data(
     methy_label=1,
     norm_method="mad",
 ):
+    features_list = None
     if kmer_len % 2 == 0:
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
     signal, seq_read = data
-    if seq_read.mapping_quality<mapq:
-        return 0,features_list
+    if seq_read.mapping_quality < mapq:
+        return features_list
     read_dict = dict(seq_read.tags)
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
@@ -740,8 +739,8 @@ def process_data(
         cigar_tuples = seq_read.cigartuples
         qalign_start = seq_read.query_alignment_start
         qalign_end = seq_read.query_alignment_end
-        if (qalign_end-qalign_start)/seq_read.query_length<coverage_ratio:
-            return 0,features_list
+        if (qalign_end-qalign_start) / seq_read.query_length < coverage_ratio:
+            return features_list
         if seq_read.is_reverse:
             seq_start = len(seq) - qalign_end
             seq_end = len(seq) - qalign_start
@@ -862,7 +861,7 @@ def process_sig_seq(
                         if seq is None:
                             continue
                         data = (signal, seq_read)
-                        state,feature_lists = process_data(
+                        feature_lists = process_data(
                             data,
                             motif_seqs,
                             positions,
@@ -874,9 +873,8 @@ def process_sig_seq(
                             methyl_label,
                             norm_method,
                         )
-                        if state==1:
+                        if feature_lists is not None:
                             feature_Q.put(feature_lists)
-                        
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
