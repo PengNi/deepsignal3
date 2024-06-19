@@ -46,7 +46,7 @@ from .utils.process_utils import key_sep
 
 LOGGER = get_logger(__name__)
 
-time_wait = 0.1
+time_wait = 0.01
 
 MAP_RES = namedtuple(
     "MAP_RES",

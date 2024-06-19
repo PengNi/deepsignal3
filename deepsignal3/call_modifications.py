@@ -62,11 +62,9 @@ from .extract_features import _group_signals_by_movetable_v2
 from .extract_features import _get_signals_rect
 
 from .utils.process_utils import get_logger
-from .utils.process_utils import split_list
 
 from .utils import bam_reader
 import pod5
-import pysam
 
 LOGGER = get_logger(__name__)
 
@@ -76,7 +74,7 @@ os.environ["MKL_THREADING_LAYER"] = "GNU"
 queue_size_border = 2000
 qsize_size_border_p5batch = 40
 queue_size_border_f5batch = 100
-time_wait = 0.1
+time_wait = 0.01
 key_sep = "||"
 
 def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):

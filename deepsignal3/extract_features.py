@@ -42,7 +42,6 @@ from .utils.process_utils import base2code_dna
 
 # from .utils.process_utils import generate_aligner_with_options
 
-import re
 from .utils.process_utils import CIGAR_REGEX
 from .utils.process_utils import CIGAR2CODE
 
@@ -56,7 +55,7 @@ from .utils.process_utils import get_logger
 LOGGER = get_logger(__name__)
 
 queue_size_border = 2000
-time_wait = 0.1
+time_wait = 0.01
 
 MAP_RES = namedtuple(
     "MAP_RES",
