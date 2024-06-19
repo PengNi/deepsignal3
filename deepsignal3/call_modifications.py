@@ -5,11 +5,14 @@ output format: chromosome, pos, strand, pos_in_strand, read_name, read_loc,
 prob_0, prob_1, called_label, seq
 """
 
+import os
+# add this export temporarily
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
 from __future__ import absolute_import
 
 import torch
 import argparse
-import os
 import sys
 import numpy as np
 from sklearn import metrics
