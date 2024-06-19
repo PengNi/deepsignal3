@@ -14,11 +14,13 @@ from .models import (
     ModelBiLSTM, 
 )
 from .dataloader import (
-    SignalFeaData1,
+    SignalFeaData1s,
+    generate_offsets,
 )
 from .dataloader import clear_linecache
 from .utils.process_utils import display_args
 from .utils.process_utils import str2bool
+from .utils.process_utils import count_line_num
 
 from .utils.constants_torch import use_cuda
 
@@ -120,6 +122,7 @@ def train_worker(local_rank, global_world_size, args):
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
         args.model_type,
+        local_rank
     )
 
     if args.init_model is not None:
@@ -145,7 +148,9 @@ def train_worker(local_rank, global_world_size, args):
     # 2. define dataloader
     sys.stderr.write("training_process-{} reading data..\n".format(os.getpid()))
     
-    train_dataset = SignalFeaData1(args.train_file)
+    train_linenum = count_line_num(args.train_file, False)
+    train_offsets = generate_offsets(args.train_file)
+    train_dataset = SignalFeaData1s(args.train_file, train_offsets, train_linenum)
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
                                                                     shuffle=True)
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
@@ -155,7 +160,9 @@ def train_worker(local_rank, global_world_size, args):
                                                pin_memory=True,
                                                sampler=train_sampler)
 
-    valid_dataset = SignalFeaData1(args.valid_file)
+    valid_linenum = count_line_num(args.valid_file, False)
+    valid_offsets = generate_offsets(args.valid_file)
+    valid_dataset = SignalFeaData1s(args.valid_file, valid_offsets, valid_linenum)
     valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset,
                                                                     shuffle=True)
     valid_loader = torch.utils.data.DataLoader(dataset=valid_dataset,
@@ -492,10 +499,10 @@ def main():
                              help="effective in StepLR. default 1")
     st_training.add_argument('--lr_patience', type=int, default=0, required=False,
                              help="effective in ReduceLROnPlateau. default 0")
-    st_training.add_argument("--max_epoch_num", action="store", default=50, type=int,
-                             required=False, help="max epoch num, default 50")
-    st_training.add_argument("--min_epoch_num", action="store", default=10, type=int,
-                             required=False, help="min epoch num, default 10")
+    st_training.add_argument("--max_epoch_num", action="store", default=20, type=int,
+                             required=False, help="max epoch num, default 20")
+    st_training.add_argument("--min_epoch_num", action="store", default=5, type=int,
+                             required=False, help="min epoch num, default 5")
     st_training.add_argument('--pos_weight', type=float, default=1.0, required=False)
     st_training.add_argument('--step_interval', type=int, default=500, required=False)
     st_training.add_argument('--dl_num_workers', type=int, default=0, required=False,

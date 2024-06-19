@@ -266,6 +266,41 @@ class SignalFeaData1(Dataset):
         return self._total_data
 
 
+def generate_offsets(filename):
+    offsets = []
+    with open(filename, "r") as rf:
+        offsets.append(rf.tell())
+        while rf.readline():
+            offsets.append(rf.tell())
+    return offsets
+
+
+class SignalFeaData1s(Dataset):
+    def __init__(self, filename, offsets, linenum, transform=None):
+        # print(">>>using linecache to access '{}'<<<\n"
+        #       ">>>after done using the file, "
+        #       "remember to use linecache.clearcache() to clear cache for safety<<<".format(filename))
+        self._filename = os.path.abspath(filename)
+        self._total_data = linenum
+        self._transform = transform
+        
+        self._offsets = offsets
+        self._current_offset = 0
+
+    def __getitem__(self, idx):
+        offset = self._offsets[idx]
+        with open(self._filename, "r") as rf:
+            rf.seek(offset)
+            line = rf.readline()
+        output = parse_a_line1(line)
+        if self._transform is not None:
+            output = self._transform(output)
+        return output
+
+    def __len__(self):
+        return self._total_data
+
+
 class SignalFeaData2(Dataset):
     def __init__(self, filename, transform=None):
         # print(">>>using linecache to access '{}'<<<\n"

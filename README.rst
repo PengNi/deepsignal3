@@ -4,6 +4,13 @@ deepsignal3
 
 Release
 -------
+0.1.2
+-----
+buf fixes
+
+add trainm module
+
+
 0.1.1
 -----
 freeze version of the first released models

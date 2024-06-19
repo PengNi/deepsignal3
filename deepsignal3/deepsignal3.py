@@ -1184,10 +1184,10 @@ def main():
                              help="effective in StepLR. default 1")
     stm_training.add_argument('--lr_patience', type=int, default=0, required=False,
                              help="effective in ReduceLROnPlateau. default 0")
-    stm_training.add_argument("--max_epoch_num", action="store", default=50, type=int,
-                             required=False, help="max epoch num, default 50")
-    stm_training.add_argument("--min_epoch_num", action="store", default=10, type=int,
-                             required=False, help="min epoch num, default 10")
+    stm_training.add_argument("--max_epoch_num", action="store", default=20, type=int,
+                             required=False, help="max epoch num, default 20")
+    stm_training.add_argument("--min_epoch_num", action="store", default=5, type=int,
+                             required=False, help="min epoch num, default 5")
     stm_training.add_argument('--pos_weight', type=float, default=1.0, required=False)
     stm_training.add_argument('--step_interval', type=int, default=500, required=False)
     stm_training.add_argument('--dl_num_workers', type=int, default=0, required=False,
