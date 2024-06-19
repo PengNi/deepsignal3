@@ -46,6 +46,8 @@ import re
 from .utils.process_utils import CIGAR_REGEX
 from .utils.process_utils import CIGAR2CODE
 
+from .utils.process_utils import key_sep
+
 import mappy
 import threading
 from collections import namedtuple
@@ -55,8 +57,6 @@ LOGGER = get_logger(__name__)
 
 queue_size_border = 2000
 time_wait = 0.1
-
-key_sep = "||"
 
 MAP_RES = namedtuple(
     "MAP_RES",

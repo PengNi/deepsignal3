@@ -42,11 +42,11 @@ from .utils.process_utils import write_featurestr
 # from .utils.process_utils import split_list
 from .utils.process_utils import normalize_signals
 
+from .utils.process_utils import key_sep
+
 LOGGER = get_logger(__name__)
 
 time_wait = 0.1
-
-key_sep = "||"
 
 MAP_RES = namedtuple(
     "MAP_RES",

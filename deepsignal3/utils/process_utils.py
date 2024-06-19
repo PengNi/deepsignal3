@@ -138,6 +138,8 @@ nproc_to_call_mods_in_cpu_mode = 2
 bwa_exec = "bwa"
 minimap2_exec = "minimap2"
 
+key_sep = "||"
+
 
 def generate_aligner_with_options(
     is_bwa, path_to_bwa, path_to_minimap2=None, bestn=1, threads=1
@@ -567,7 +569,6 @@ def split_list(data, num_chunks):
 
 
 def read_position_file(position_file):
-    key_sep = "||"
     postions = set()
     with open(position_file, "r") as rf:
         for line in rf:
