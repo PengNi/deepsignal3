@@ -187,8 +187,8 @@ def process_data(
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
     num_trimmed = read_dict["ts"]
-    #norm_shift = read_dict["sm"]
-    #norm_scale = read_dict["sd"]
+    # norm_shift = read_dict["sm"]
+    # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
     # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
@@ -294,6 +294,7 @@ def process_sig_seq(
     norm_method="mad",
     nproc_extract=1,
 ):
+    LOGGER.info("extract_features process-{} starts".format(os.getpid()))
     while True:
         pod5_file = pod5s_q.get()
         if pod5_file == "kill":
@@ -332,6 +333,7 @@ def process_sig_seq(
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
+    LOGGER.info("extract_features process-{} finished".format(os.getpid()))
 
 
 def extract_features(args):

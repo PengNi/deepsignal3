@@ -358,7 +358,7 @@ def train_worker(local_rank, global_world_size, args):
 
 def train_multigpu(args):
     total_start = time.time()
-    torch.manual_seed(args.seed)
+    torch.manual_seed(args.tseed)
     
     if use_cuda:
         torch.cuda.manual_seed(args.tseed)
