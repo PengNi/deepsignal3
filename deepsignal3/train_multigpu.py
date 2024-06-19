@@ -298,7 +298,7 @@ def train_worker(local_rank, global_world_size, args):
                     # model.state_dict() or model.module.state_dict()?
                     torch.save(model.module.state_dict(),
                                model_dir + args.model_type +
-                               '".b{}_s{}_epoch{}.ckpt"'.format(args.seq_len, args.signal_len, epoch + 1))
+                               '.b{}_s{}_epoch{}.ckpt'.format(args.seq_len, args.signal_len, epoch + 1))
                 # TODO: dist.barrier()? and read/sync model dict?
                 if v_accuracy > curr_best_accuracy:
                     curr_best_accuracy = v_accuracy
