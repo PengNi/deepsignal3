@@ -605,6 +605,15 @@ def _call_mods_from_fast5s_cpu2(
     _reads_processed_stats(error2num, len_fast5s, args.single)
 
 
+def _get_gpus():
+    num_gpus = torch.cuda.device_count()
+    if num_gpus > 0:
+        gpulist = list(range(num_gpus))
+    else:
+        gpulist = [0]
+    return gpulist * 1000
+
+
 def _call_mods_from_pod5_gpu(
     pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
 ):
@@ -619,59 +628,10 @@ def _call_mods_from_pod5_gpu(
             nproc = 3
             nproc_dp = nproc - 2
     features_batch_q = Queue()
+    pred_str_q = Queue()
     pod5s_q = Queue()
     fill_files_queue(pod5s_q, pod5_dr, args.r_batch_size)
     pod5s_q.put("kill")
-    nproc_ex = nproc - nproc_dp - 1
-    p_rfs = []
-    for proc_idx in range(nproc_ex):
-        p_rf = mp.Process(
-            target=process_sig_seq,
-            args=(
-                bam_index,
-                pod5s_q,
-                features_batch_q,
-                motif_seqs,
-                positions,
-                args.seq_len,
-                args.signal_len,
-                args.mapq,
-                args.coverage_ratio,
-                args.mod_loc,
-                args.methy_label,
-                args.normalize_method,
-            ),
-            name="extracter_{:03d}".format(proc_idx),
-        )
-        p_rf.daemon = True
-        p_rf.start()
-        p_rfs.append(p_rf)
-    
-
-    pred_str_q = Queue()
-
-    predstr_procs = []
-
-    gpulist = _get_gpus()
-    gpuindex = 0
-
-    for i in range(nproc_dp):
-        p = mp.Process(
-            target=_call_mods_q,
-            args=(
-                model_path,
-                features_batch_q,
-                pred_str_q,
-                success_file,
-                args,
-                gpulist[gpuindex],
-            ),
-            name="caller_{:03d}".format(i),
-        )
-        gpuindex += 1
-        p.daemon = True
-        p.start()
-        predstr_procs.append(p)
 
     # print("write_process started..")
     # ctx_spawn = mp.get_context('spawn')
@@ -682,24 +642,61 @@ def _call_mods_from_pod5_gpu(
     )
     p_w.daemon = True
     p_w.start()
+
+    nproc_ex = nproc - nproc_dp - 1
+    p_rfs = []
+    predstr_procs = []
+    gpulist = _get_gpus()
+    gpuindex = 0
+    for proc_idx in range(max(nproc_ex, nproc_dp)):
+        if proc_idx < nproc_ex:
+            p_rf = mp.Process(
+                target=process_sig_seq,
+                args=(
+                    bam_index,
+                    pod5s_q,
+                    features_batch_q,
+                    motif_seqs,
+                    positions,
+                    args.seq_len,
+                    args.signal_len,
+                    args.mapq,
+                    args.coverage_ratio,
+                    args.mod_loc,
+                    args.methy_label,
+                    args.normalize_method,
+                ),
+                name="extracter_{:03d}".format(proc_idx),
+            )
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+        if proc_idx < nproc_dp:
+            p = mp.Process(
+                target=_call_mods_q,
+                args=(
+                    model_path,
+                    features_batch_q,
+                    pred_str_q,
+                    success_file,
+                    args,
+                    gpulist[gpuindex],
+                ),
+                name="caller_{:03d}".format(proc_idx),
+            )
+            gpuindex += 1
+            p.daemon = True
+            p.start()
+            predstr_procs.append(p)
+
     for pb in p_rfs:
         pb.join()
     features_batch_q.put("kill")
     for p in predstr_procs:
         p.join()
-
     # print("finishing the write_process..")
     pred_str_q.put("kill")
     p_w.join()
-
-
-def _get_gpus():
-    num_gpus = torch.cuda.device_count()
-    if num_gpus > 0:
-        gpulist = list(range(num_gpus))
-    else:
-        gpulist = [0]
-    return gpulist * 1000
 
 
 def process_data(
