@@ -169,6 +169,8 @@ def process_data(
     positions,
     kmer_len,
     signals_len,
+    mapq,
+    coverage_ratio,
     methyloc=0,
     methy_label=1,
     norm_method="mad",
@@ -177,15 +179,23 @@ def process_data(
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
     features_list = []
+    
     signal, seq_read = data
+    if seq_read.mapping_quality<mapq:
+        return features_list
     read_dict = dict(seq_read.tags)
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
     num_trimmed = read_dict["ts"]
-    # norm_shift = read_dict["sm"]
-    # norm_scale = read_dict["sd"]
+    #norm_shift = read_dict["sm"]
+    #norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]
     norm_signals = normalize_signals(signal_trimmed, norm_method)
+    # sshift, sscale = np.mean(signal_trimmed), float(np.std(signal_trimmed))
+    # if sscale == 0.0:
+    #    norm_signals = signal_trimmed
+    # else:
+    #    norm_signals = (signal_trimmed - sshift) / sscale
     seq = seq_read.get_forward_sequence()
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
@@ -199,6 +209,8 @@ def process_data(
         cigar_tuples = seq_read.cigartuples
         qalign_start = seq_read.query_alignment_start
         qalign_end = seq_read.query_alignment_end
+        if (qalign_end-qalign_start)/seq_read.query_length<coverage_ratio:
+            return features_list
         if seq_read.is_reverse:
             seq_start = len(seq) - qalign_end
             seq_end = len(seq) - qalign_start
@@ -275,12 +287,13 @@ def process_sig_seq(
     positions,
     kmer_len,
     signals_len,
+    mapq,
+    coverage_ratio,
     methyloc=0,
     methyl_label=1,
     norm_method="mad",
     nproc_extract=1,
 ):
-    LOGGER.info("extract_features process-{} starts".format(os.getpid()))
     while True:
         pod5_file = pod5s_q.get()
         if pod5_file == "kill":
@@ -308,15 +321,17 @@ def process_sig_seq(
                             positions,
                             kmer_len,
                             signals_len,
+                            mapq,
+                            coverage_ratio,
                             methyloc,
                             methyl_label,
                             norm_method,
                         )
-                        feature_Q.put(feature_lists)
+                        if len(feature_lists) != 0:
+                            feature_Q.put(feature_lists)
                 except KeyError:
                     LOGGER.warn("Read:%s not found in BAM file" % read_name)
                     continue
-    LOGGER.info("extract_features process-{} finished".format(os.getpid()))
 
 
 def extract_features(args):
@@ -364,6 +379,8 @@ def extract_features(args):
                 positions,
                 args.seq_len,
                 args.signal_len,
+                args.mapq,
+                args.coverage_ratio,
                 args.mod_loc,
                 args.methy_label,
                 args.normalize_method,
