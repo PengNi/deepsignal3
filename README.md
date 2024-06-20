@@ -63,8 +63,8 @@ pip install torch==1.11.0
 
 Currently, we have trained the following models:
 
-- [human.r10.4.1.4khz.CG.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/human.r10.4.1.4khz.CG.epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
-- [plant.r10.4.1.4khz.CG.CHG.CHH.epoch7.ckpt](https://github.com/PengNi/deepsignal3/tree/main/model/plant.r10.4.1.4khz.CG.CHG.CHH.epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH.
+- [human_r1041_4khz_CG_epoch7.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
+- [plant_r1041_4khz_C_epoch7.ckpt](model/plant_r1041_4khz_C_epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH.
 
 ## Example data
 
