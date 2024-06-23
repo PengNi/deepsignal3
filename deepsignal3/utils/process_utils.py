@@ -126,7 +126,8 @@ iupac_alphabets_rna = {
 }
 
 CODE2CIGAR = "MIDNSHP=XB"
-CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
+# CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
+CIGAR_REGEX = re.compile(r"(\d+)([MIDNSHP=XB])")
 CIGAR2CODE = dict([y, x] for x, y in enumerate(CODE2CIGAR))
 
 # max_queue_size = 2000

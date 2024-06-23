@@ -101,7 +101,7 @@ def train_worker(local_rank, global_world_size, args):
                     os.makedirs(model_dir)
                 else:
                     model_regex = re.compile(
-                        r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                        r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
                     )
                     for mfile in os.listdir(model_dir):
                         if model_regex.match(mfile) is not None:

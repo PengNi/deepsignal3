@@ -14,7 +14,7 @@
 deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https://pytorch.org/).
 
 - Prerequisites:\
-   [Python3.\*](https://www.python.org/) \
+   [Python3.\*](https://www.python.org/) (version >=3.12) \
    [Dorado](https://github.com/nanoporetech/dorado)\
    [Guppy](https://nanoporetech.com/community)
 - Dependencies: \
@@ -31,7 +31,7 @@ We highly recommend to use a virtual environment for the installation of deepsig
 
 ```bash
 # create
-conda create -n deepsignalpenv python=3.8
+conda create -n deepsignalpenv python=3.12
 # activate
 conda activate deepsignalpenv
 # deactivate
