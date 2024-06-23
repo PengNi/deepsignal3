@@ -267,7 +267,7 @@ def train_transfer(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -563,7 +563,7 @@ def train_domain(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -816,7 +816,7 @@ def train_fusion(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1151,7 +1151,7 @@ def train_cnn(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1350,7 +1350,7 @@ def train_cg(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1575,7 +1575,7 @@ def train_combine(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1800,7 +1800,7 @@ def trainFreq(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -2014,7 +2014,7 @@ def trainFreq_mp(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
