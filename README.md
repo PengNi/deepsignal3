@@ -64,8 +64,8 @@ pip install torch==1.11.0
 Currently, we have trained the following models:
 
 - [human_r1041_4khz_CG_epoch7.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
-- [plant_r1041_4khz_C_epoch7.ckpt](model/plant_r1041_4khz_C_epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH. (Not recommended)
-- [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. (recommend)
+- [plant_r1041_4khz_C_epoch7.ckpt](model/plant_r1041_4khz_C_epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters --signal_len 16. (Not recommended)
+- [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters --seq_len 13. (recommend)
 
 ## Example data
 
@@ -81,7 +81,7 @@ Demo commands of using Dorado and deepsignal3 to call 5mC from POD5 files:
 # 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
 # 2. deepsignal3 call_mods
-CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 16
+CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 15
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 ```
 
@@ -139,7 +139,7 @@ For the example data:
 deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
 
 # pod5 files as input, use GPU
-CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 16
+CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 15
 # fast5 files as input, use GPU
 CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
 ```
