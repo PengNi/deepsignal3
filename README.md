@@ -68,7 +68,7 @@ Currently, we have trained the following models:
 ```bash
 deepsignal3 call_mods --input_path pod5s/ --model_path model/plant_r1041_4khz_C_epoch7.ckpt --result_file pod5s.C.call_mods.tsv --reference_path ref.fa --motifs C --nproc 30 --nproc_gpu 6 --signal_len 16
 ```
-- [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters --seq_len 13. (recommend)
+- [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters. (recommend)
 ```bash
 deepsignal3 call_mods --input_path pod5s/ --model_path model/plant_r1041_5khz_C_epoch4.ckpt --result_file pod5s.C.call_mods.tsv --reference_path ref.fa --motifs C --nproc 30 --nproc_gpu 6 --seq_len 13
 ```
