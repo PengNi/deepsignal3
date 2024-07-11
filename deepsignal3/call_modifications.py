@@ -855,6 +855,8 @@ def process_sig_seq(
                     continue
                 try:
                     for seq_read in seq_index.get_alignments(read_name):
+                        if seq_read.is_supplementary or seq_read.is_secondary:
+                            continue 
                         seq = seq_read.get_forward_sequence()
                         if seq is None:
                             continue
