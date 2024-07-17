@@ -10,6 +10,8 @@ buf fixes
 
 add trainm module
 
+limit python version>=3.12
+
 
 0.1.1
 -----
