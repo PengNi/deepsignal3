@@ -64,6 +64,7 @@ pip install torch==1.11.0
 Currently, we have trained the following models:
 
 - [human_r1041_4khz_CG_epoch7.ckpt](model/human_r1041_4khz_CG_epoch7.ckpt): model trained using human **R10.4.1(4kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
+- [human_r1041_5khz_CG_epoch5.ckpt](model/human_r1041_5khz_CG_epoch5.ckpt): model trained using human **R10.4.1(5kHz)** data with reference genome chm13v2 for detecting 5mC at CpG sites.
 - ~~[plant_r1041_4khz_C_epoch7.ckpt](model/plant_r1041_4khz_C_epoch7.ckpt): model trained using rice **R10.4.1(4kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters `--motifs C --seq_len 21 --signal_len 16`. (Not recommended)~~
 
 - [plant_r1041_5khz_C_epoch4.ckpt](model/plant_r1041_5khz_C_epoch4.ckpt): model trained using rice **R10.4.1(5kHz)** data for detecting 5mC at CG/CHG/CHH. The use of this model requires the use of parameters `--motifs C --seq_len 13 --signal_len 15`. (recommend)
