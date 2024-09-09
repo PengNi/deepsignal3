@@ -616,15 +616,14 @@ def _call_mods_from_pod5_gpu(
     pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
 ):
     nproc = args.nproc
-    if use_cuda:
-        nproc_dp = args.nproc_gpu
-        if nproc_dp < 1:
-            nproc_dp = 1
-    else:
-        if nproc < 3:
-            LOGGER.info("--nproc must be >= 3!!")
-            nproc = 3
-            nproc_dp = nproc - 2
+    nproc_dp = args.nproc_gpu
+    if nproc_dp < 1:
+        nproc_dp = 1
+    if nproc <= nproc_dp + 1:
+        LOGGER.info("--nproc must be >= --nproc_gpu + 2!!")
+        nproc = nproc_dp + 1 + 1
+
+
     features_batch_q = Queue()
     pred_str_q = Queue()
     pod5s_q = Queue()
@@ -696,6 +695,83 @@ def _call_mods_from_pod5_gpu(
     pred_str_q.put("kill")
     p_w.join()
 
+def _call_mods_from_pod5_cpu(
+    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
+):
+    nproc = args.nproc
+    nproc_dp = nproc_to_call_mods_in_cpu_mode
+    if nproc <= nproc_dp + 1:
+        nproc = nproc_dp + 1 + 1
+        
+    features_batch_q = Queue()
+    pred_str_q = Queue()
+    pod5s_q = Queue()
+    fill_files_queue(pod5s_q, pod5_dr, args.r_batch_size)
+    pod5s_q.put("kill")
+
+    # print("write_process started..")
+    # ctx_spawn = mp.get_context('spawn')
+    p_w = mp.Process(
+        target=_write_predstr_to_file,
+        args=(args.result_file, pred_str_q),
+        name="writer",
+    )
+    p_w.daemon = True
+    p_w.start()
+
+    nproc_ex = nproc - nproc_dp - 1
+    p_rfs = []
+    predstr_procs = []
+    # gpulist = _get_gpus()
+    # gpuindex = 0
+    for proc_idx in range(max(nproc_ex, nproc_dp)):
+        if proc_idx < nproc_ex:
+            p_rf = mp.Process(
+                target=process_sig_seq,
+                args=(
+                    bam_index,
+                    pod5s_q,
+                    features_batch_q,
+                    motif_seqs,
+                    positions,
+                    args.seq_len,
+                    args.signal_len,
+                    args.mapq,
+                    args.coverage_ratio,
+                    args.mod_loc,
+                    args.methy_label,
+                    args.normalize_method,
+                ),
+                name="extracter_{:03d}".format(proc_idx),
+            )
+            p_rf.daemon = True
+            p_rf.start()
+            p_rfs.append(p_rf)
+        if proc_idx < nproc_dp:
+            p = mp.Process(
+                target=_call_mods_q,
+                args=(
+                    model_path,
+                    features_batch_q,
+                    pred_str_q,
+                    success_file,
+                    args,
+                ),
+                name="caller_{:03d}".format(proc_idx),
+            )
+            #gpuindex += 1
+            p.daemon = True
+            p.start()
+            predstr_procs.append(p)
+
+    for pb in p_rfs:
+        pb.join()
+    features_batch_q.put("kill")
+    for p in predstr_procs:
+        p.join()
+    # print("finishing the write_process..")
+    pred_str_q.put("kill")
+    p_w.join()
 
 def process_data(
     data,
@@ -913,15 +989,26 @@ def call_mods(args):
 
             # ctx_fork = mp.get_context('fork')
             pod5_dr = pod5_dr = get_files(input_path, is_recursive, ".pod5")
-            _call_mods_from_pod5_gpu(
-                pod5_dr,
-                bam_index,
-                success_file,
-                model_path,
-                motif_seqs,
-                positions,
-                args,
-            )
+            if use_cuda:
+                _call_mods_from_pod5_gpu(
+                    pod5_dr,
+                    bam_index,
+                    success_file,
+                    model_path,
+                    motif_seqs,
+                    positions,
+                    args,
+                )
+            else:
+                _call_mods_from_pod5_cpu(
+                    pod5_dr,
+                    bam_index,
+                    success_file,
+                    model_path,
+                    motif_seqs,
+                    positions,
+                    args,
+                )
         else:
             read_strand = _get_read_sequened_strand(args.basecall_subgroup)
             motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs = (
