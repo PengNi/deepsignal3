@@ -106,6 +106,12 @@ def train_worker(local_rank, global_world_size, args):
                     for mfile in os.listdir(model_dir):
                         if model_regex.match(mfile) is not None:
                             os.remove(model_dir + "/" + mfile)
+                    model_regex = re.compile(
+                        r"" + args.model_type + r".betterthanlast.b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
+                    )
+                    for mfile in os.listdir(model_dir):
+                        if model_regex.match(mfile) is not None:
+                            os.remove(model_dir + "/" + mfile)
             model_dir += "/"
 
     model = ModelBiLSTM(

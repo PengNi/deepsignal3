@@ -12,7 +12,7 @@ from txt_formater import SiteStats
 from txt_formater import split_key
 
 
-def calculate_mods_frequency(mods_files, prob_cf):
+def calculate_mods_frequency(mods_files, prob_cf, methyl_threshold=0.5):
     sitekeys = set()
     sitekey2stats = dict()
 
@@ -31,7 +31,7 @@ def calculate_mods_frequency(mods_files, prob_cf):
                     sitekey2stats[mod_record._site_key]._prob_0 += mod_record._prob_0
                     sitekey2stats[mod_record._site_key]._prob_1 += mod_record._prob_1
                     sitekey2stats[mod_record._site_key]._coverage += 1
-                    if mod_record._called_label == 1:
+                    if mod_record.get_called_label(methyl_threshold) == 1:
                         sitekey2stats[mod_record._site_key]._met += 1
                     else:
                         sitekey2stats[mod_record._site_key]._unmet += 1
@@ -89,6 +89,8 @@ def main():
     parser.add_argument('--file_uid', type=str, action="store", required=False, default=None,
                         help='a unique str which all input files has, this is for finding all input files and ignoring '
                              'the un-input-files in a input directory. if input_path is a file, ignore this arg.')
+    
+    parser.add_argument('--methyl_threshold', type=float, action="store", required=False, default=0.5)
 
     args = parser.parse_args()
 
@@ -98,6 +100,8 @@ def main():
     file_uid = args.file_uid
     issort = args.sort
     isbed = args.bed
+
+    methyl_threshold = args.methyl_threshold
 
     mods_files = []
     for ipath in input_paths:
@@ -115,7 +119,7 @@ def main():
     print("get {} input file(s)..".format(len(mods_files)))
 
     print("reading the input files..")
-    sites_stats = calculate_mods_frequency(mods_files, prob_cf)
+    sites_stats = calculate_mods_frequency(mods_files, prob_cf, methyl_threshold)
     print("writing the result..")
     write_sitekey2stats(sites_stats, result_file, issort, isbed)
 

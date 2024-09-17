@@ -24,6 +24,12 @@ class ModRecord:
         if abs(self._prob_0 - self._prob_1) < prob_threshold:
             return False
         return True
+    
+    def get_called_label(self, methyl_threshold=0.5):
+        if self._prob_1 >= methyl_threshold:
+            return 1
+        else:
+            return 0
 
 
 def split_key(key):
