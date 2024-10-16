@@ -4,6 +4,13 @@ deepsignal3
 
 Release
 -------
+0.1.3
+-----
+refactoring code using iteratordataset
+
+the speed has increased
+
+-------
 0.1.2
 -----
 buf fixes
