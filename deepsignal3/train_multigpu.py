@@ -101,13 +101,7 @@ def train_worker(local_rank, global_world_size, args):
                     os.makedirs(model_dir)
                 else:
                     model_regex = re.compile(
-                        r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
-                    )
-                    for mfile in os.listdir(model_dir):
-                        if model_regex.match(mfile) is not None:
-                            os.remove(model_dir + "/" + mfile)
-                    model_regex = re.compile(
-                        r"" + args.model_type + r".betterthanlast.b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
+                        r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
                     )
                     for mfile in os.listdir(model_dir):
                         if model_regex.match(mfile) is not None:
@@ -128,7 +122,7 @@ def train_worker(local_rank, global_world_size, args):
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
         args.model_type,
-        local_rank
+        #local_rank
     )
 
     if args.init_model is not None:

@@ -5,6 +5,7 @@ import random
 import multiprocessing
 import multiprocessing.queues
 import numpy as np
+import torch
 import gc
 import math
 import logging
@@ -126,8 +127,7 @@ iupac_alphabets_rna = {
 }
 
 CODE2CIGAR = "MIDNSHP=XB"
-# CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
-CIGAR_REGEX = re.compile(r"(\d+)([MIDNSHP=XB])")
+CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
 CIGAR2CODE = dict([y, x] for x, y in enumerate(CODE2CIGAR))
 
 # max_queue_size = 2000
@@ -238,7 +238,10 @@ def normalize_signals(signals, normalize_method="mad"):
 def fill_files_queue(files_q, files, batch_size=1, is_single=False):
     batch_size_tmp = 1 if not is_single else batch_size
     for i in np.arange(0, len(files), batch_size_tmp):
-        files_q.put(files[i : (i + batch_size_tmp)])
+        if isinstance(files_q, list):
+            files_q.append(files[i : (i + batch_size_tmp)])
+        else:
+            files_q.put(files[i : (i + batch_size_tmp)])
     return
 
 
@@ -772,7 +775,14 @@ def get_model_type_str(model_type, is_base, is_signallen):
         return "_".join([model_type, basestr, slenstr])
     else:
         return "_".join([model_type])
-
+    
+def _get_gpus():
+    num_gpus = torch.cuda.device_count()
+    if num_gpus > 0:
+        gpulist = list(range(num_gpus))
+    else:
+        gpulist = [0]
+    return gpulist
 
 class SharedCounter(object):
     """A synchronized shared counter.

@@ -4,6 +4,7 @@
 from __future__ import absolute_import
 
 import torch
+import pytorch_lightning as pl
 import torch.nn as nn
 import torch.autograd as autograd
 import torch.nn.functional as F
@@ -121,7 +122,7 @@ def ResNet3(out_channels=128, strides=(1, 2, 2), init_channels=1, in_planes=4):
 
 
 # model ===============================================
-class ModelBiLSTM(nn.Module):
+class ModelBiLSTM(pl.LightningModule):
     def __init__(
         self,
         seq_len=13,
@@ -137,12 +138,12 @@ class ModelBiLSTM(nn.Module):
         is_signallen=True,
         is_trace=False,
         module="both_bilstm",
-        device=0,
+        #device=0,
     ):
         super(ModelBiLSTM, self).__init__()
         self.model_type = "BiLSTM"
         self.module = module
-        self.device = device
+        #self.device = device
 
         self.seq_len = seq_len
         self.signal_len = signal_len
@@ -180,6 +181,7 @@ class ModelBiLSTM(nn.Module):
                     batch_first=True,
                     bidirectional=True,
                 )
+                self.lstm_seq.flatten_parameters()
                 # (batch_size,seq_len,hidden_size*2)
             else:
                 self.lstm_seq = nn.LSTM(
@@ -190,6 +192,7 @@ class ModelBiLSTM(nn.Module):
                     batch_first=True,
                     bidirectional=True,
                 )
+                self.lstm_seq.flatten_parameters()
             self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
             # self.dropout_seq = nn.Dropout(p=dropout_rate)
             self.relu_seq = nn.ReLU()
@@ -205,6 +208,7 @@ class ModelBiLSTM(nn.Module):
                 batch_first=True,
                 bidirectional=True,
             )
+            self.lstm_signal.flatten_parameters()
             self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
             # self.dropout_signal = nn.Dropout(p=dropout_rate)
             self.relu_signal = nn.ReLU()
@@ -218,6 +222,7 @@ class ModelBiLSTM(nn.Module):
             batch_first=True,
             bidirectional=True,
         )
+        self.lstm_comb.flatten_parameters()
         self.dropout1 = nn.Dropout(p=dropout_rate)
         self.fc1 = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
         self.dropout2 = nn.Dropout(p=dropout_rate)
@@ -229,13 +234,13 @@ class ModelBiLSTM(nn.Module):
     def get_model_type(self):
         return self.model_type
 
-    def init_hidden(self, batch_size, num_layers, hidden_size):
+    def init_hidden(self, batch_size, num_layers, hidden_size, device):
         # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
+        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size)).to(device)
+        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size)).to(device)
+        # if use_cuda:
+        #     h0 = h0.cuda(self.device)
+        #     c0 = c0.cuda(self.device)
         return h0, c0
 
     def forward(self, kmer, base_means, base_stds, base_signal_lens, signals):
@@ -289,7 +294,7 @@ class ModelBiLSTM(nn.Module):
 
             out_seq, _ = self.lstm_seq(
                 out_seq,
-                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq),
+                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq, out_seq.device),
             )  # (N, L, nhid_seq*2)
             out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
             # out_seq = self.dropout_seq(out_seq)
@@ -308,7 +313,7 @@ class ModelBiLSTM(nn.Module):
             out_signal, _ = self.lstm_signal(
                 out_signal,
                 self.init_hidden(
-                    out_signal.size(0), self.num_layers2, self.nhid_signal
+                    out_signal.size(0), self.num_layers2, self.nhid_signal, out_signal.device
                 ),
             )
             out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
@@ -323,7 +328,7 @@ class ModelBiLSTM(nn.Module):
         elif self.module == "both_bilstm":
             out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
         out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
+            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size,out.device)
         )  # (N, L, hidden_size*2)
         out_fwd_last = out[:, -1, : self.hidden_size]
         out_bwd_last = out[:, 0, self.hidden_size :]
@@ -742,14 +747,14 @@ class combineLoss(nn.Module):
     def __init__(self, device=0, β=0.1):
         super(combineLoss, self).__init__()
         # weight_rank = torch.from_numpy(np.array([1, 1.0])).float()
-        weight_rank = torch.from_numpy(np.array([1, 1.0])).float()
+        weight_rank = torch.from_numpy(np.array([1,1, 1.0])).float()
         self.device = device
         self.β = β
         if use_cuda:
             weight_rank = weight_rank.cuda(self.device)
             # self.β=β.cuda(self.device)
             # weight_rank2 = weight_rank2.cuda(self.device)
-        self.loss = nn.BCEWithLogitsLoss(pos_weight=weight_rank)  # nn.BCELoss()
+        self.loss = nn.CrossEntropyLoss(weight=weight_rank)#nn.BCEWithLogitsLoss(pos_weight=weight_rank)  # nn.BCELoss()
         self.project = nn.Sigmoid()
         # self.loss_2 = nn.CrossEntropyLoss(weight=weight_rank2)
 
@@ -765,7 +770,7 @@ class combineLoss(nn.Module):
 
         # margin_loss = labels * left + 0.5 * (1.0 - labels) * right
         # margin_loss = margin_loss.sum()
-        onehot_tags = torch.eye(2)[tags.long(), :].cuda(self.device)
+        onehot_tags = torch.eye(3)[tags.long(), :].cuda(self.device)
         return self.β * self.loss(domain_classes, onehot_tags)
 
 
@@ -813,7 +818,7 @@ class Classifier1(nn.Module):
 
 
 class Classifier2(nn.Module):
-    def __init__(self, dropout_rate=0.5, hidden_size=256, num_classes=2, device=0):
+    def __init__(self, dropout_rate=0.5, hidden_size=256, num_classes=3, device=0):
         super(Classifier2, self).__init__()
         self.device = device
         self.grl = GradientReverseLayer()

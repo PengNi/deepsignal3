@@ -83,7 +83,7 @@ Demo commands of using Dorado and deepsignal3 to call 5mC from POD5 files:
 # 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
 # 2. deepsignal3 call_mods
-CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 15
+deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 ```
 
@@ -98,7 +98,7 @@ guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_
 # fast5s_guppy/ is the output folder
 # 2. deepsignal3 call_mods
 # CG
-CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
+deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
@@ -138,12 +138,12 @@ For the example data:
 # call 5mCpGs for instance
 
 # extracted-feature file as input
-deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 30 --nproc_gpu 6
+deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
 # pod5 files as input, use GPU
-CUDA_VISIBLE_DEVICES=0 deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 30 --nproc_gpu 6  --seq_len 21 --signal_len 15
+deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
 # fast5 files as input, use GPU
-CUDA_VISIBLE_DEVICES=0 deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 30 --nproc_gpu 6
+deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
