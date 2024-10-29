@@ -35,6 +35,8 @@ from torch.multiprocessing import Queue
 from torch.utils.data import DataLoader,DistributedSampler
 from torch.cuda.amp import autocast
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 import torch.distributed as dist
 
 import time
@@ -83,6 +85,8 @@ import mappy
 import threading
 import warnings
 
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 LOGGER = get_logger(__name__)
 
 # add this export temporarily
@@ -108,7 +112,7 @@ def call_mods(args):
     input_path = validate_path(args.input_path, "--input_path")
     
     success_file = prepare_success_file(input_path)
-
+    
     # Handle directory input (for pod5 or fast5)
     if os.path.isdir(input_path):
         handle_directory_input(args, input_path, model_path, success_file)
@@ -149,11 +153,29 @@ def handle_pod5_input(args, input_path, model_path, success_file, is_dna, is_rec
     motif_seqs = get_motif_seqs(args.motifs, is_dna)
     positions = read_position_file(args.positions) if args.positions else None
     pod5_dr = get_files(input_path, is_recursive, ".pod5")
-
+    
+    pod5_files_queue = Queue()
+    fill_files_queue(pod5_files_queue, pod5_dr)
     if use_cuda:
-        _call_mods_from_pod5_gpu(pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args)
+        #_call_mods_from_pod5_gpu(pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args)
+        pred_str_q = Queue()
+        
+        p_w = mp.Process(
+            target=_write_predstr_to_file,
+            args=(args.result_file, pred_str_q),
+            name="writer",
+        )
+        p_w.daemon = True
+        p_w.start()
+        world_size = torch.cuda.device_count()
+        param=(pod5_dr, bam_index, success_file, model_path, motif_seqs, positions,pred_str_q,pod5_files_queue, args)
+        mp.spawn(_call_mods_from_pod5_gpu_distributed, args=(world_size, param), nprocs=world_size, join=True)
+        pred_str_q.put("kill")
+        p_w.join()
+        
+
     else:
-        _call_mods_from_pod5_cpu(pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args)
+        _call_mods_from_pod5_cpu(pod5_dr, bam_index, success_file, model_path, motif_seqs, positions,pod5_files_queue, args)
 
 def handle_fast5_input(args, input_path, model_path, success_file, ref_path, is_dna, is_recursive):
     read_strand = _get_read_sequened_strand(args.basecall_subgroup)
@@ -223,6 +245,99 @@ def load_model(model_path: str,device, args):
 
     return model
 
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    #os.environ["CUDA_VISIBLE_DEVICES"] = str(rank)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+def load_model_distributed(model_path, device, args):
+    """
+    Loads and initializes the ModelBiLSTM for DistributedDataParallel with weights from model_path.
+
+    Parameters:
+    - model_path (str): Path to the saved model file (.ckpt).
+    - device (torch.device): The device to load the model onto.
+    - args (Namespace): Parsed arguments containing model parameters.
+
+    Returns:
+    - model (torch.nn.Module): The initialized model wrapped with DDP.
+    """
+    # Initialize the model with parameters from args
+    model = ModelBiLSTM(
+        args.seq_len,
+        args.signal_len,
+        args.layernum1,
+        args.layernum2,
+        args.class_num,
+        args.dropout_rate,
+        args.hid_rnn,
+        args.n_vocab,
+        args.n_embed,
+        str2bool(args.is_base),
+        str2bool(args.is_signallen),
+        str2bool(args.is_trace),
+        args.model_type, 
+    )
+    
+    # Load model weights
+    try:
+        checkpoint = torch.load(model_path, map_location=device)
+        model.load_state_dict(checkpoint, strict=False)
+    except Exception as e:
+        raise RuntimeError(f"Error loading model from {model_path}: {e}")
+    
+    # Move model to the designated device
+    model.to(device)
+    
+    # Wrap the model in DistributedDataParallel
+    model = DDP(model, device_ids=[device.index])
+
+    return model
+def _call_mods_from_pod5_gpu_distributed(rank, world_size,param):
+    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions,pred_str_q,pod5_files_queue, args=param
+    setup(rank, world_size)
+    LOGGER.info(f"Process {rank} initialized")
+    nproc=determine_process_count(args)
+    # Initialize model and move it to the current process's device
+    device = torch.device(f"cuda:{rank}")#torch.device("cuda:0")#
+    model = load_model_distributed(model_path, device, args)
+    model.eval()
+    # Prepare dataset and DataLoader with DistributedSampler
+    dataset = Pod5Dataset(pod5_dr, bam_index, motif_seqs, positions, device,pod5_files_queue, args)  # Adapt based on dataset type
+    #sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=False)
+    data_loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=nproc,
+        #sampler=sampler,
+        collate_fn=collate_fn_inference,
+        worker_init_fn=worker_init_fn,
+        pin_memory=True
+    )
+    #sampler.set_epoch(rank)
+    #LOGGER.info(f"Rank {rank}: Dataset length {len(dataset)}; Batch size {args.batch_size}")
+
+
+
+    # Run model inference
+    
+    with torch.no_grad():
+        for batch in data_loader:
+            if batch is None:
+                LOGGER.info(f"Rank {rank}: batch is None")
+                continue
+            with autocast():#device_type='cuda'
+                pred_str, accuracy, batch_num = _call_mods(batch, model, args.batch_size)
+            #LOGGER.info(f"Rank {rank}: Processed batch {batch_num} with accuracy {accuracy}")
+            pred_str_q.put(pred_str)
+
+    cleanup()
+    
+
 def _call_mods_from_pod5_gpu(
     pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
 ):
@@ -283,10 +398,10 @@ def _call_mods_from_pod5_gpu(
     p_w.join()
 
 def _call_mods_from_pod5_cpu(
-    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args
+    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions,pod5_files_queue, args
 ):
     nproc = determine_process_count(args)
-    dataset = Pod5Dataset(pod5_dr, bam_index, motif_seqs, positions, 'cpu', args)
+    dataset = Pod5Dataset(pod5_dr, bam_index, motif_seqs, positions, 'cpu',pod5_files_queue, args)
     data_loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=nproc,
                         worker_init_fn=worker_init_fn,collate_fn=collate_fn_inference,
                         #pin_memory=True

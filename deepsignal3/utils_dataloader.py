@@ -1,5 +1,8 @@
 import torch
-from torch.utils.data import IterableDataset
+import torch.distributed as dist
+
+from torch.utils.data import Dataset,IterableDataset
+
 from torch.multiprocessing import Queue
 import h5py  # Assuming fast5 files are in HDF5 format, update accordingly
 import pod5
@@ -8,6 +11,8 @@ import time
 import os
 import random
 import math
+
+import queue
 
 from .utils.process_utils import get_logger
 from .utils.process_utils import fill_files_queue
@@ -47,7 +52,7 @@ MAP_RES = namedtuple(
 )
 
 class Pod5Dataset(IterableDataset):
-    def __init__(self, pod5_dr, bam_index, motif_seqs, positions,device, args):
+    def __init__(self, pod5_dr, bam_index, motif_seqs, positions,device,pod5_files_queue, args):
         super(Pod5Dataset).__init__()
         self.files = pod5_dr
         self.bam_index = bam_index
@@ -55,14 +60,59 @@ class Pod5Dataset(IterableDataset):
         self.positions = positions
         self.args = args
         self.device = device
+        self.pod5_queue = pod5_files_queue
+        #获取当前进程的 rank 和总进程数
+        # if dist.is_initialized():
+        #     self.rank = dist.get_rank()
+        #     self.world_size = dist.get_world_size()
+        # else:
+        #     self.rank = 0
+        #     self.world_size = 1
+        # self.data = self._load_data()  # 预加载数据文件列表
 
+    # def _load_data(self):
+    #     # 将所有文件路径加载到一个列表中
+    #     pod5s_q = []
+    #     fill_files_queue(pod5s_q, self.files)
+    #     data = []
+    #     for files in pod5s_q:
+    #         data.extend(files)
+    #     return data
+    # def __len__(self):
+        
+    #     return len(self.data)
+
+    # def __getitem__(self, idx):
+    #     # 从文件列表中获取文件路径
+    #     file = self.data[idx]
+        
+    #     # 从文件中读取数据
+    #     with pod5.Reader(file) as reader:
+    #         items = []
+    #         for read_record in reader.reads():
+    #             data_list = self.process_sig_seq(read_record)
+    #             for item in data_list:
+    #                 if len(item) > 0:
+    #                     items.append(to_tensor(item, self.device))
+        
+    #     # 返回文件中所有的数据项
+    #     return items
     def __iter__(self):
         # 填充pod5数据队列
-        pod5s_q = []
-        fill_files_queue(pod5s_q, self.files)
+        # pod5s_q = []
+        # fill_files_queue(pod5s_q, self.files)
         LOGGER.info("extract_features process-{} starts".format(os.getpid()))
-        for files in pod5s_q:
-            for file in files:  # Iterate over files
+        # files_per_rank = self.data[self.rank::self.world_size]
+        
+        # for file in files_per_rank:
+            #for files in pod5s_q:
+            #for file in files:  # Iterate over files
+        while not self.pod5_queue.empty():
+            try:
+                files = self.pod5_queue.get_nowait()
+            except queue.Empty:
+                break
+            for file in files:
                 with pod5.Reader(file) as reader:
                 # Using list to collect data instead of yielding a generator
                     for read_record in reader.reads():
