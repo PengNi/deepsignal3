@@ -90,7 +90,7 @@ def write_sitekey2stats(sitekey2stats, result_file, is_sort, is_bed):
                     )
                 else:
                     wf.write(
-                        "%s\t%d\t%s\t%d\t%.3f\t%.3f\t%d\t%d\t%d\t%.4f\t%s\n"
+                        "%s\t%d\t%s\t%s\t%.3f\t%.3f\t%d\t%d\t%d\t%.4f\t%s\n"
                         % (
                             chrom,
                             pos,
