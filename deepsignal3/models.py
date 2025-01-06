@@ -4,7 +4,7 @@
 from __future__ import absolute_import
 
 import torch
-import pytorch_lightning as pl
+#import pytorch_lightning as pl
 import torch.nn as nn
 import torch.autograd as autograd
 import torch.nn.functional as F
@@ -122,7 +122,7 @@ def ResNet3(out_channels=128, strides=(1, 2, 2), init_channels=1, in_planes=4):
 
 
 # model ===============================================
-class ModelBiLSTM(pl.LightningModule):
+class ModelBiLSTM(nn.Module):
     def __init__(
         self,
         seq_len=13,

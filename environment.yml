@@ -12,7 +12,7 @@ dependencies:
   - scikit-learn>=0.20.1
   - pytorch::pytorch-cuda=11.8  # 11.8 is ok for 2.3.1, 2.3.0, 2.2.2, 2.2.1, 2.2.0, 2.1.2, 2.1.1, 2.1.0, 2.0.1, 2.0.0
   - pytorch::pytorch=2.3.1  # add channel prefix (pytorch::) to make sure the cuda version being installed?
-  - pytorch-lightning
+#  - pytorch-lightning
   - pysam
   - minimap2
   - mappy
