@@ -11,6 +11,8 @@ from txt_formater import ModRecord
 from txt_formater import SiteStats
 from txt_formater import split_key
 
+import math
+
 
 def calculate_mods_frequency(mods_files, prob_cf, methyl_threshold=0.5):
     sitekeys = set()
@@ -41,7 +43,7 @@ def calculate_mods_frequency(mods_files, prob_cf, methyl_threshold=0.5):
     return sitekey2stats
 
 
-def write_sitekey2stats(sitekey2stats, result_file, is_sort, is_bed):
+def write_sitekey2stats(sitekey2stats, result_file, is_sort, is_bed, use_prob=False, use_floor=False):
     if is_sort:
         keys = sorted(list(sitekey2stats.keys()), key=lambda x: split_key(x))
     else:
@@ -55,12 +57,22 @@ def write_sitekey2stats(sitekey2stats, result_file, is_sort, is_bed):
             sitestats = sitekey2stats[key]
             assert(sitestats._coverage == (sitestats._met + sitestats._unmet))
             if sitestats._coverage > 0:
-                rmet = float(sitestats._met) / sitestats._coverage
+                if use_prob:
+                    rmet = float(sitestats._prob_1) / sitestats._coverage
+                else:
+                    rmet = float(sitestats._met) / sitestats._coverage
                 if is_bed:
-                    wf.write("\t".join([chrom, str(pos), str(pos + 1), ".", str(sitestats._coverage),
-                                        sitestats._strand,
-                                        str(pos), str(pos + 1), "0,0,0", str(sitestats._coverage),
-                                        str(int(round(rmet * 100 + 0.001, 0)))]) + "\n")
+                    if use_floor:
+                        wf.write("\t".join([chrom, str(pos), str(pos + 1), ".", str(sitestats._coverage),
+                                            sitestats._strand,
+                                            str(pos), str(pos + 1), "0,0,0", str(sitestats._coverage),
+                                            # str(int(round(rmet * 100 + 0.001, 0)))]) + "\n")
+                                            str(int(math.floor(rmet * 100)))]) + "\n")
+                    else:
+                        wf.write("\t".join([chrom, str(pos), str(pos + 1), ".", str(sitestats._coverage),
+                                            sitestats._strand,
+                                            str(pos), str(pos + 1), "0,0,0", str(sitestats._coverage),
+                                            str(int(round(rmet * 100 + 0.001, 0)))]) + "\n")
                 else:
                     wf.write("%s\t%d\t%s\t%d\t%.3f\t%.3f\t%d\t%d\t%d\t%.4f\t%s\n" % (chrom, pos, sitestats._strand,
                                                                                      sitestats._pos_in_strand,
@@ -92,6 +104,9 @@ def main():
     
     parser.add_argument('--methyl_threshold', type=float, action="store", required=False, default=0.5)
 
+    parser.add_argument("--use_prob", action="store_true", default=False, help="use the probability to call freq")
+    parser.add_argument("--use_floor", action="store_true", default=False, help="use floor to round the rmet")
+
     args = parser.parse_args()
 
     input_paths = args.input_path
@@ -102,6 +117,8 @@ def main():
     isbed = args.bed
 
     methyl_threshold = args.methyl_threshold
+    use_prob = args.use_prob
+    use_floor = args.use_floor
 
     mods_files = []
     for ipath in input_paths:
@@ -121,7 +138,7 @@ def main():
     print("reading the input files..")
     sites_stats = calculate_mods_frequency(mods_files, prob_cf, methyl_threshold)
     print("writing the result..")
-    write_sitekey2stats(sites_stats, result_file, issort, isbed)
+    write_sitekey2stats(sites_stats, result_file, issort, isbed, use_prob, use_floor)
 
 
 if __name__ == '__main__':

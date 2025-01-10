@@ -551,10 +551,10 @@ def main():
         type=float,
         action="store",
         required=False,
-        default=0.5,
+        default=0,
         help="this is to remove ambiguous calls. "
         "if abs(prob1-prob0)>=prob_cf, then we use the call. e.g., proc_cf=0 "
-        "means use all calls. range [0, 1], default 0.5.",
+        "means use all calls. range [0, 1], default 0.",
     )
 
     sub_call_freq.set_defaults(func=main_call_freq)
