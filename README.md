@@ -77,13 +77,13 @@ Example data, including training data and test data, can be downloaded from ([go
 
 To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
 
-Demo commands of using Dorado and deepsignal3 to call 5mC from POD5 files:
+Demo commands of using Dorado and deepsignal3 to call 5mC from POD5/SloW5/BloW5 files:
 
 ```bash
 # 1. dorado basecall using GPU
 dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
 # 2. deepsignal3 call_mods
-deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
+deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 ```
 
@@ -140,8 +140,8 @@ For the example data:
 # extracted-feature file as input
 deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
-# pod5 files as input, use GPU
-deepsignal3 --pod5 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
+# pod5/slow5/blow5 files as input, use GPU
+deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
 # fast5 files as input, use GPU
 deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
@@ -195,7 +195,7 @@ Features of targeted sites can be extracted for training or testing.
 For the example data, deepsignal3 extracts 21-mer-seq and 21\*15-signal features of each CpG motif in reads by default.:
 
 ```bash
-deepsignal3 --pod5 extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
+deepsignal3 extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
 
 deepsignal3 extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
 ```
@@ -258,6 +258,4 @@ export HDF5_PLUGIN_PATH=/abslolute/path/to/ont-vbz-hdf-plugin-1.0.1-Linux/usr/lo
 ## Todo
 
 - [ ] add tqdm for progress bar
-- [ ] support data input format: slow5 and blow5
 - [ ] support data output format: bam
-- [ ] optimize feature extraction module (in terms of speed)

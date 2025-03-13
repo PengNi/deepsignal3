@@ -46,7 +46,7 @@ from .utils.process_utils import key_sep
 
 LOGGER = get_logger(__name__)
 
-time_wait = 0.01
+time_wait = 0.1
 
 MAP_RES = namedtuple(
     "MAP_RES",
@@ -187,6 +187,8 @@ def process_data(
     mv_table = np.asarray(read_dict["mv"][1:])
     stride = int(read_dict["mv"][0])
     num_trimmed = read_dict["ts"]
+    if seq_read.has_tag('sp'):
+        num_trimmed += seq_read.get_tag('sp')
     # norm_shift = read_dict["sm"]
     # norm_scale = read_dict["sd"]
     signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]

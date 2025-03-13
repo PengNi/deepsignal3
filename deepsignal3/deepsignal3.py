@@ -4,7 +4,7 @@ from __future__ import absolute_import
 import sys
 import argparse
 
-from .utils.process_utils import display_args
+from .utils.process_utils import display_args,detect_file_type,validate_path
 
 from ._version import DEEPSIGNAL3_VERSION
 
@@ -12,9 +12,11 @@ from ._version import DEEPSIGNAL3_VERSION
 def main_extraction(args):
     from .extract_features import extract_features
     from .extract_features_pod5 import extract_features as extract_features_pod5
-
+    
     display_args(args)
-    if args.pod5:
+    input_path = validate_path(args.input_path, "--input_path")
+    file_type = detect_file_type(input_path)
+    if file_type in ['pod5', 'slow5']:
         extract_features_pod5(args)
     else:
         extract_features(args)
@@ -551,10 +553,10 @@ def main():
         type=float,
         action="store",
         required=False,
-        default=0,
+        default=0.5,
         help="this is to remove ambiguous calls. "
         "if abs(prob1-prob0)>=prob_cf, then we use the call. e.g., proc_cf=0 "
-        "means use all calls. range [0, 1], default 0.",
+        "means use all calls. range [0, 1], default 0.5.",
     )
 
     sub_call_freq.set_defaults(func=main_call_freq)
@@ -653,7 +655,7 @@ def main():
         action="store",
         type=int,
         required=False,
-        default=16,
+        default=15,
         help="the number of signals of one base to be used in deepsignal, default 15",
     )
     se_extraction.add_argument(
@@ -1073,6 +1075,18 @@ def main():
         default=False,
         help="if output probs of samples after 1st iteration",
     )
+    sd_denoise.add_argument("--nodes", default=1, type=int,
+                              help="number of nodes for distributed training, default 1")
+    sd_denoise.add_argument("--ngpus_per_node", default=2, type=int,
+                              help="number of GPUs per node for distributed training, default 2")
+    sd_denoise.add_argument("--dist-url", default="tcp://127.0.0.1:12315", type=str,
+                              help="url used to set up distributed training")
+    sd_denoise.add_argument("--node_rank", default=0, type=int,
+                              help="node rank for distributed training, default 0")
+    sd_denoise.add_argument("--epoch_sync", action="store_true", default=False,
+                              help="if sync model params of gpu0 to other local gpus after per epoch")
+    sd_denoise.add_argument('--dl_num_workers', type=int, default=0, required=False,
+                             help="default 0")
     #
     sub_denoise.set_defaults(func=main_denoise)
 
@@ -1200,6 +1214,7 @@ def main():
     stm_training.add_argument('--use_compile', type=str, default="no", required=False,
                              help="[EXPERIMENTAL] if using torch.compile, yes or no, "
                                   "default no ('yes' only works in pytorch>=2.0)")
+    stm_training.add_argument('--lambda_corr','--a', type=float, default=0.1)
 
     stm_trainingp = sub_trainm.add_argument_group("TRAINING PARALLEL")
     stm_trainingp.add_argument("--nodes", default=1, type=int,
@@ -1231,9 +1246,9 @@ def main():
     parser.add_argument(
         "--freq", action="store_true", default=False, help="weather use freq attribute"
     )
-    parser.add_argument(
-        "--pod5", action="store_true", default=False, help="input pod5 format"
-    )
+    # parser.add_argument(
+    #     "--pod5", action="store_true", default=False, help="input pod5 format"
+    # )
 
     args = parser.parse_args()
     if hasattr(args, "func"):

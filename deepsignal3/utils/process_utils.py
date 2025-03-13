@@ -12,6 +12,7 @@ import logging
 import re
 from statsmodels import robust
 import time
+from typing import Union, Tuple, List
 
 time_wait = 0.1
 
@@ -127,7 +128,7 @@ iupac_alphabets_rna = {
 }
 
 CODE2CIGAR = "MIDNSHP=XB"
-CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")
+CIGAR_REGEX = re.compile(r"(\d+)([MIDNSHP=XB])")
 CIGAR2CODE = dict([y, x] for x, y in enumerate(CODE2CIGAR))
 
 # max_queue_size = 2000
@@ -314,21 +315,97 @@ def get_motif_seqs(motifs, is_dna=True):
     return motif_seqs
 
 
-def get_files(input_dir, is_recursive=True, file_type=".fast5"):
-    input_dir = os.path.abspath(input_dir)
+def get_files(input_path: str, is_recursive: bool = True, file_type: Union[str, Tuple[str, ...]] = ".fast5") -> List[str]:
+    """
+    获取指定路径中匹配文件类型的文件列表，支持单个文件或目录。
+    
+    Args:
+        input_path (str): 输入路径（可以是文件或目录）
+        is_recursive (bool): 是否递归查找（仅对目录有效），默认 True
+        file_type (str or tuple): 文件扩展名，单一字符串（如 '.fast5'）或元组（如 ('.slow5', '.blow5')）
+    
+    Returns:
+        List[str]: 匹配的文件路径列表
+    """
+    input_path = os.path.abspath(input_path)
     inputs = []
-    if is_recursive:
-        for root, dirnames, filenames in os.walk(input_dir):
-            for filename in fnmatch.filter(filenames, "*" + file_type):
-                file_path = os.path.join(root, filename)
-                inputs.append(file_path)
+    
+    # 将 file_type 转换为元组，确保统一处理
+    if isinstance(file_type, str):
+        file_types = (file_type,)
     else:
-        for file_name in os.listdir(input_dir):
-            if file_name.endswith(file_type):
-                file_path = "/".join([input_dir, file_name])
-                inputs.append(file_path)
+        file_types = file_type
+    
+    # 如果是文件，直接检查是否匹配
+    if os.path.isfile(input_path):
+        for ext in file_types:
+            if input_path.endswith(ext):
+                inputs.append(input_path)
+                break
+    # 如果是目录，按递归或非递归方式处理
+    elif os.path.isdir(input_path):
+        if is_recursive:
+            for root, _, filenames in os.walk(input_path):
+                for ext in file_types:
+                    for filename in fnmatch.filter(filenames, "*" + ext):
+                        file_path = os.path.join(root, filename)
+                        inputs.append(file_path)
+        else:
+            for file_name in os.listdir(input_path):
+                for ext in file_types:
+                    if file_name.endswith(ext):
+                        file_path = os.path.join(input_path, file_name)
+                        inputs.append(file_path)
+                        break
+    else:
+        raise ValueError(f"Input path {input_path} is neither a file nor a directory")
+    
     return inputs
 
+def validate_path(path, error_message):
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        raise ValueError(f"{error_message} is not set right!")
+    return abs_path
+
+def detect_file_type(path, recursive=True):
+    """检测目录中主要的文件类型，返回 'pod5', 'slow5', 'fast5' 或 None"""
+    if os.path.isfile(path):
+        if path.endswith('.pod5'):
+            return 'pod5'
+        elif path.endswith('.slow5') or path.endswith('.blow5'):
+            return 'slow5'
+        elif path.endswith('.fast5'):
+            return 'fast5'
+        else:
+            return None
+    elif os.path.isdir(path):
+        file_counts = {'pod5': 0, 'slow5': 0, 'fast5': 0}
+        for root, _, files in os.walk(path):
+            for fname in files:
+                if fname.endswith('.pod5'):
+                    file_counts['pod5'] += 1
+                    break
+                elif fname.endswith('.slow5') or fname.endswith('.blow5'):
+                    file_counts['slow5'] += 1
+                    break
+                elif fname.endswith('.fast5'):
+                    file_counts['fast5'] += 1
+                    break
+            #if not recursive:
+            break
+        if file_counts['pod5'] > 0 and file_counts['slow5'] == 0 and file_counts['fast5'] == 0:
+            return 'pod5'
+        elif file_counts['slow5'] > 0 and file_counts['pod5'] == 0 and file_counts['fast5'] == 0:
+            return 'slow5'
+        elif file_counts['fast5'] > 0 and file_counts['pod5'] == 0 and file_counts['slow5'] == 0:
+            return 'fast5'
+        elif sum(file_counts.values()) == 0:
+            return None
+        else:
+            raise ValueError(f"Directory {path} contains mixed file types: {file_counts}")
+    else:
+        raise ValueError(f"Path {path} is neither a file nor a directory")
 
 # functions for combining files and random sampling lines of txt files ================
 def count_line_num(sl_filepath, fheader=False):

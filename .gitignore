@@ -1,9 +1,8 @@
-
-
-
-
-
-./build/
-./deepsignal3.egg-info/
-./dist/
-./model/
+build/
+deepsignal3.egg-info/
+dist/
+model/
+deepsignal3/__pycache__
+deepsignal3/utils/__pycache__
+.vscode/
+scripts/__pycache__

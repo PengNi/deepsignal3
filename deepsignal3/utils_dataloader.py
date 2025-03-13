@@ -6,6 +6,7 @@ from torch.utils.data import Dataset,IterableDataset
 from torch.multiprocessing import Queue
 import h5py  # Assuming fast5 files are in HDF5 format, update accordingly
 import pod5
+import pyslow5
 import numpy as np
 import time
 import os
@@ -51,16 +52,17 @@ MAP_RES = namedtuple(
     ),
 )
 
-class Pod5Dataset(IterableDataset):
-    def __init__(self, pod5_dr, bam_index, motif_seqs, positions,device,pod5_files_queue, args):
-        super(Pod5Dataset).__init__()
-        self.files = pod5_dr
+class SignalDataset(IterableDataset):
+    def __init__(self, input_dr, bam_index, motif_seqs, positions, device, files_queue, args, format_type='pod5'):
+        super(SignalDataset).__init__()
+        self.files = input_dr
         self.bam_index = bam_index
         self.motif_seqs = motif_seqs
         self.positions = positions
         self.args = args
         self.device = device
-        self.pod5_queue = pod5_files_queue
+        self.files_queue = files_queue
+        self.format_type = format_type  # 'pod5' 或 'slow5'
         #获取当前进程的 rank 和总进程数
         # if dist.is_initialized():
         #     self.rank = dist.get_rank()
@@ -98,36 +100,44 @@ class Pod5Dataset(IterableDataset):
     #     # 返回文件中所有的数据项
     #     return items
     def __iter__(self):
-        # 填充pod5数据队列
-        # pod5s_q = []
-        # fill_files_queue(pod5s_q, self.files)
         LOGGER.info("extract_features process-{} starts".format(os.getpid()))
-        # files_per_rank = self.data[self.rank::self.world_size]
         
-        # for file in files_per_rank:
-            #for files in pod5s_q:
-            #for file in files:  # Iterate over files
-        while not self.pod5_queue.empty():
+        while not self.files_queue.empty():
             try:
-                files = self.pod5_queue.get_nowait()
+                files = self.files_queue.get_nowait()
             except queue.Empty:
                 break
             for file in files:
-                with pod5.Reader(file) as reader:
-                # Using list to collect data instead of yielding a generator
-                    for read_record in reader.reads():
-                        data_list = self.process_sig_seq(read_record)
-                        for item in data_list:
-                            if len(item)==0:
-                                #LOGGER.info("empty item")
-                                continue
-                            yield to_tensor(item,self.device)
-    def process_sig_seq(self,
-        read_record,
-    ):       
-        #results = []  # Collect results in a list                 
-        read_name = str(read_record.read_id)
-        signal = read_record.signal
+                if self.format_type == 'pod5':
+                    with pod5.Reader(file) as reader:
+                        for read_record in reader.reads():
+                            data_list = self.process_sig_seq(read_record)
+                            for item in data_list:
+                                if len(item) == 0:
+                                    continue
+                                yield to_tensor(item, self.device)
+                elif self.format_type == 'slow5':
+                    try:
+                        reader = pyslow5.Open(file, 'r')
+                        LOGGER.info(f"Successfully opened {file}")
+                        for read_record in reader.seq_reads():
+                            data_list = self.process_sig_seq(read_record)
+                            for item in data_list:
+                                if len(item) == 0:
+                                    continue
+                                yield to_tensor(item, self.device)
+                    except Exception as e:
+                        LOGGER.error(f"Error opening {file}: {str(e)}")
+                        raise
+                    finally:
+                        reader.close()
+    def process_sig_seq(self, read_record):
+        if self.format_type == 'pod5':
+            read_name = str(read_record.read_id)
+            signal = read_record.signal
+        elif self.format_type == 'slow5':
+            read_name = read_record['read_id']
+            signal = read_record['signal']
         if signal is None:
             return []
         try:
@@ -162,6 +172,8 @@ class Pod5Dataset(IterableDataset):
         mv_table = np.asarray(read_dict["mv"][1:])
         stride = int(read_dict["mv"][0])
         num_trimmed = read_dict["ts"]
+        if seq_read.has_tag('sp'):
+            num_trimmed += seq_read.get_tag('sp')
         # norm_shift = read_dict["sm"]
         # norm_scale = read_dict["sd"]
         signal_trimmed = signal[num_trimmed:] if num_trimmed >= 0 else signal[:num_trimmed]

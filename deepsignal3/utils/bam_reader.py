@@ -60,9 +60,9 @@ class ReadIndexedBam:
                 read = next(self.bam_fh)
             except StopIteration:
                 break
-            #index_read_id = get_parent_id(read)
-            index_read_id = read.query_name
-            if read.is_supplementary or read.is_secondary or index_read_id in self._bam_idx:
+            index_read_id = get_parent_id(read)
+            #index_read_id = read.query_name
+            if read.is_supplementary or read.is_secondary:
                 continue
             self.num_records += 1
             self._bam_idx[index_read_id].append(read_ptr)
