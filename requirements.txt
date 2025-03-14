@@ -7,3 +7,4 @@ mappy
 ont-fast5-api
 pod5
 h5py>=2.8.0
+pyslow5
