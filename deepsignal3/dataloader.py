@@ -4,7 +4,7 @@ import os
 import numpy as np
 
 from .utils.process_utils import base2code_dna
-
+import torch
 
 def clear_linecache():
     # linecache should be treated carefully
@@ -449,3 +449,17 @@ class SignalFeaData7(Dataset):
 
     def __len__(self):
         return self._total_data
+
+class AggregateDataset(Dataset):
+    """适配 site-level 训练（与你之前 npz 格式完全一致）"""
+    def __init__(self, npz_path):
+        data = np.load(npz_path)
+        self.histos = torch.from_numpy(data['histograms']).float()#.permute(0, 2, 1)   # (N,11,20)
+        self.pos_dist = torch.from_numpy(data['pos_dist']).float()   # (N,11)
+        self.labels = torch.from_numpy(data['labels']).float()       # (N,) 真实频率 0~1
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.pos_dist[idx], self.histos[idx], self.labels[idx]

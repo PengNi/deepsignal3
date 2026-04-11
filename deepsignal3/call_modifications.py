@@ -1,8 +1,7 @@
 """
-call modifications from fast5 files or extracted features,
-using tensorflow and the trained model.
-output format: chromosome, pos, strand, pos_in_strand, read_name, read_loc,
-prob_0, prob_1, called_label, seq
+call_modifications.py
+Unified inference entry point: inference_ultra()
+Supports: modelMTM / ModelBiLSTM; pod5 / slow5 / fast5 / tsv input; GPU / CPU
 """
 
 from __future__ import absolute_import
@@ -10,12 +9,10 @@ from __future__ import absolute_import
 import os
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
-import torch
-import argparse
 import sys
+import argparse
 import numpy as np
-from sklearn import metrics
-import gzip
+import torch
 import torch.multiprocessing as mp
 
 try:
@@ -23,508 +20,562 @@ try:
 except RuntimeError:
     pass
 
-from torch.multiprocessing import Queue
-from torch.utils.data import DataLoader, DistributedSampler
-from torch.cuda.amp import autocast
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
-import time
-import pod5
-import pyslow5
-
-from .models import ModelBiLSTM
-from .utils.process_utils import base2code_dna, code2base_dna, str2bool, display_args, normalize_signals
-from .utils.process_utils import nproc_to_call_mods_in_cpu_mode, get_refloc_of_methysite_in_motif
-from .utils.process_utils import get_motif_seqs, get_files, fill_files_queue, read_position_file,detect_file_type,validate_path
-from .extract_features import _extract_preprocess
-from .utils.constants_torch import FloatTensor, use_cuda
-from .extract_features import _get_read_sequened_strand, get_aligner
-from .extract_features import _group_signals_by_movetable_v2, _get_signals_rect
-from .utils_dataloader import SignalDataset, Fast5Dataset, TsvDataset
-from .utils_dataloader import collate_fn_inference, worker_init_fn
-from .utils.process_utils import get_logger, _get_gpus
-from .utils import bam_reader
-import mappy
-import threading
-import warnings
-import uuid
-
-warnings.filterwarnings("ignore", category=FutureWarning)
+from .models import ModelBiLSTM, modelMTM
+from .utils.process_utils import (
+    base2code_dna, code2base_dna, str2bool, display_args,
+    get_motif_seqs, get_files, read_position_file,
+    detect_file_type, get_logger,
+)
+from .utils_dataloader import producer
 
 LOGGER = get_logger(__name__)
 os.environ["MKL_THREADING_LAYER"] = "GNU"
 
-queue_size_border = 2000
-qsize_size_border_p5batch = 40
-queue_size_border_f5batch = 100
-time_wait = 0.01
-key_sep = "||"
 
-def call_mods(args):
-    start = time.time()
-    LOGGER.info("[call_mods] starts")
-    
-    model_path = validate_path(args.model_path, "--model_path")
-    input_path = validate_path(args.input_path, "--input_path")
-    success_file = prepare_success_file(input_path)
-    
-    file_type = detect_file_type(input_path, str2bool(args.recursively))
-    if file_type in ['pod5', 'slow5', 'fast5']:
-        handle_signal_or_fast5_input(args, input_path, model_path, success_file, file_type)
-    else:
-        handle_file_input(args, input_path, model_path, success_file)  # 处理 TSV 文件
+# ─────────────────────────────────────────────
+# Model loading
+# ─────────────────────────────────────────────
 
-    cleanup_success_file(success_file)
-    LOGGER.info("[call_mods] costs %.2f seconds.." % (time.time() - start))
-
-
-def prepare_success_file(input_path):
-    success_file = input_path.rstrip("/") + "." + str(uuid.uuid1()) + ".success"
-    if os.path.exists(success_file):
-        os.remove(success_file)
-    return success_file
-
-def handle_signal_or_fast5_input(args, input_path, model_path, success_file, file_type):
-    ref_path = validate_reference_path(args.reference_path) if args.reference_path else None
-    is_dna = not args.rna
-    is_recursive = str2bool(args.recursively)
-    
-    if file_type in ['pod5', 'slow5']:
-        bam_index = bam_reader.ReadIndexedBam(args.bam)
-        motif_seqs = get_motif_seqs(args.motifs, is_dna)
-        positions = read_position_file(args.positions) if args.positions else None
-        files_dr = get_files(input_path, is_recursive, ".pod5" if file_type == 'pod5' else (".slow5", ".blow5"))
-        
-        files_queue = Queue()
-        fill_files_queue(files_queue, files_dr)
-        
-        if use_cuda:
-            pred_str_q = Queue()
-            p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q), name="writer")
-            p_w.daemon = True
-            p_w.start()
-            world_size = torch.cuda.device_count()
-            param = (files_dr, bam_index, success_file, model_path, motif_seqs, positions, pred_str_q, files_queue, args, file_type)
-            mp.spawn(_call_mods_from_signal_gpu_distributed, args=(world_size, param), nprocs=world_size, join=True)
-            pred_str_q.put("kill")
-            p_w.join()
-        else:
-            _call_mods_from_signal_cpu(files_dr, bam_index, success_file, model_path, motif_seqs, positions, files_queue, args, file_type)
-    elif file_type == 'fast5':
-        read_strand = _get_read_sequened_strand(args.basecall_subgroup)
-        motif_seqs, chrom2len, _, len_fast5s, positions, contigs = _extract_preprocess(
-            input_path, is_recursive, args.motifs, is_dna, ref_path, args.r_batch_size, args.positions, args
-        )
-        aligner = get_aligner(ref_path, args.best_n) if args.mapping else None
-        fast5s_q = get_files(input_path, is_recursive, ".fast5")
-        
-        if use_cuda:
-            _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs, model_path, success_file, read_strand, args, aligner)
-        else:
-            _call_mods_from_fast5s_cpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs, model_path, success_file, read_strand, args, aligner)
-
-def handle_directory_input(args, input_path, model_path, success_file):
-    ref_path = validate_reference_path(args.reference_path) if args.reference_path else None
-    is_dna = not args.rna
-    is_recursive = str2bool(args.recursively)
-    file_type = detect_file_type(input_path, is_recursive)
-    
-    if file_type in ['pod5', 'slow5']:
-        handle_signal_input(args, input_path, model_path, success_file, is_dna, is_recursive, file_type)
-    elif file_type == 'fast5':
-        handle_fast5_input(args, input_path, model_path, success_file, ref_path, is_dna, is_recursive)
-    else:
-        raise ValueError(f"No valid signal files (.pod5, .slow5, .blow5, .fast5) found in {input_path}")
-
-def validate_reference_path(ref_path):
-    return validate_path(ref_path, "--reference_path")
-
-def handle_signal_input(args, input_path, model_path, success_file, is_dna, is_recursive, file_type):
-    bam_index = bam_reader.ReadIndexedBam(args.bam)
-    motif_seqs = get_motif_seqs(args.motifs, is_dna)
-    positions = read_position_file(args.positions) if args.positions else None
-    files_dr = get_files(input_path, is_recursive, ".pod5" if file_type == 'pod5' else (".slow5", ".blow5"))
-    
-    files_queue = Queue()
-    fill_files_queue(files_queue, files_dr)
-    
-    if use_cuda:
-        pred_str_q = Queue()
-        p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q), name="writer")
-        p_w.daemon = True
-        p_w.start()
-        world_size = torch.cuda.device_count()
-        param = (files_dr, bam_index, success_file, model_path, motif_seqs, positions, pred_str_q, files_queue, args, file_type)
-        mp.spawn(_call_mods_from_signal_gpu_distributed, args=(world_size, param), nprocs=world_size, join=True)
-        pred_str_q.put("kill")
-        p_w.join()
-    else:
-        _call_mods_from_signal_cpu(files_dr, bam_index, success_file, model_path, motif_seqs, positions, files_queue, args, file_type)
-
-def handle_fast5_input(args, input_path, model_path, success_file, ref_path, is_dna, is_recursive):
-    read_strand = _get_read_sequened_strand(args.basecall_subgroup)
-    motif_seqs, chrom2len, _, len_fast5s, positions, contigs = _extract_preprocess(
-        input_path, is_recursive, args.motifs, is_dna, ref_path, args.r_batch_size, args.positions, args
+def load_model_mtm(args, device):
+    """Build and load a modelMTM checkpoint onto device."""
+    model = modelMTM(
+        num_chn=args.mtm_num_base_features + args.n_embed,
+        d_static=args.mtm_d_static,
+        num_cls=args.class_num,
+        ratios=args.mtm_ratios,
+        d_model=args.hid_rnn,
+        r_hid=args.mtm_r_hid,
+        drop=args.dropout_rate,
+        norm_first=args.mtm_norm_first,
+        down_mode=args.mtm_down_mode,
+        vocab_size=args.n_vocab,
+        embedding_size=args.n_embed,
+        temporal_depth=args.mtm_temporal_depth,
     )
-    aligner = get_aligner(ref_path, args.best_n) if args.mapping else None
-    fast5s_q = get_files(input_path, is_recursive, ".fast5")
-    
-    if use_cuda:
-        _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs, model_path, success_file, read_strand, args, aligner)
-    else:
-        _call_mods_from_fast5s_cpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, contigs, model_path, success_file, read_strand, args, aligner)
 
-def handle_file_input(args, input_path, model_path, success_file):
-    if use_cuda:
-        _call_mods_from_file_gpu(input_path, model_path, args)
+    checkpoint = torch.load(args.model_path, map_location="cpu")
 
-def determine_process_count(args):
-    if use_cuda:
-        return max(1, args.nproc)
-    return max(1, args.nproc)
+    # Clean torch.compile / DDP key prefixes
+    clean = {}
+    for k, v in checkpoint.items():
+        k = k.replace("_orig_mod.", "").replace("module.", "")
+        clean[k] = v
 
-def cleanup_success_file(success_file):
-    if os.path.exists(success_file):
-        os.remove(success_file)
+    model.load_state_dict(clean, strict=True)
+    model = model.to(device)
+    model.eval()
 
-def load_model(model_path, device, args):
-    model = ModelBiLSTM(
-        args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
-        args.dropout_rate, args.hid_rnn, args.n_vocab, args.n_embed, str2bool(args.is_base),
-        str2bool(args.is_signallen), str2bool(args.is_trace), args.model_type
-    )
-    try:
-        para_dict = torch.load(model_path, map_location=torch.device(device))
-    except Exception:
-        para_dict = torch.jit.load(model_path)
-    model_dict = model.state_dict()
-    model_dict.update(para_dict)
-    model.load_state_dict(model_dict)
-    del model_dict
-    if use_cuda:
-        gpulist = _get_gpus()
-        model = torch.nn.DataParallel(model, device_ids=gpulist)
-        model = model.to(device)
+    if getattr(args, "use_compile", False):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception as e:
+            LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
+
     return model
 
-def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
-def cleanup():
-    dist.destroy_process_group()
-
-def load_model_distributed(model_path, device, args):
+def load_model_bilstm(args, device):
+    """Build and load a ModelBiLSTM checkpoint onto device."""
     model = ModelBiLSTM(
-        args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
-        args.dropout_rate, args.hid_rnn, args.n_vocab, args.n_embed, str2bool(args.is_base),
-        str2bool(args.is_signallen), str2bool(args.is_trace), args.model_type
+        seq_len=args.seq_len,
+        signal_len=args.signal_len,
+        num_layers1=args.layernum1,
+        num_layers2=args.layernum2,
+        num_classes=args.class_num,
+        dropout_rate=args.dropout_rate,
+        hidden_size=args.hid_rnn,
+        vocab_size=args.n_vocab,
+        embedding_size=args.n_embed,
+        is_base=str2bool(args.is_base),
+        is_signallen=str2bool(args.is_signallen),
+        is_trace=str2bool(args.is_trace),
+        module=args.model_type,
     )
-    try:
-        checkpoint = torch.load(model_path, map_location=device)
-        model.load_state_dict(checkpoint, strict=False)
-    except Exception as e:
-        raise RuntimeError(f"Error loading model from {model_path}: {e}")
-    model.to(device)
-    model = DDP(model, device_ids=[device.index])
+
+    checkpoint = torch.load(args.model_path, map_location="cpu")
+
+    # Clean torch.compile / DDP key prefixes
+    clean = {}
+    for k, v in checkpoint.items():
+        k = k.replace("_orig_mod.", "").replace("module.", "")
+        clean[k] = v
+
+    model.load_state_dict(clean, strict=True)
+    model = model.to(device)
+    model.eval()
+
+    if getattr(args, "use_compile", False):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception as e:
+            LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
+
     return model
 
-def _call_mods_from_signal_gpu_distributed(rank, world_size, param):
-    files_dr, bam_index, success_file, model_path, motif_seqs, positions, pred_str_q, files_queue, args, file_type = param
-    setup(rank, world_size)
-    LOGGER.info(f"Process {rank} initialized")
-    nproc = determine_process_count(args)
-    device = torch.device(f"cuda:{rank}")
-    model = load_model_distributed(model_path, device, args)
-    model.eval()
-    
-    dataset = SignalDataset(files_dr, bam_index, motif_seqs, positions, device, files_queue, args, format_type=file_type)
-    data_loader = DataLoader(
-        dataset, batch_size=args.batch_size, num_workers=nproc, collate_fn=collate_fn_inference,
-        worker_init_fn=worker_init_fn, pin_memory=True
+
+# ─────────────────────────────────────────────
+# Batch inference helpers
+# ─────────────────────────────────────────────
+
+def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
+    """
+    Run one forward pass for modelMTM.
+    Input tensors come from process_data_fast():
+        batch_k : list of np.int64   (seq_len,)
+        batch_s : list of np.float32 (seq_len, signal_len)
+        batch_t : list of int        (proximity tag)
+    """
+    kmers   = torch.stack(batch_k)          # (B, L)
+    signals = torch.stack(batch_s)          # (B, L, S)
+    tags    = torch.tensor(batch_t, dtype=torch.long)
+
+    B, L, S = signals.shape
+
+    signals = signals.view(B, -1, 1).to(device, non_blocking=True)   # (B, L*S, 1)
+    kmers   = kmers.to(device, non_blocking=True)
+    tags    = tags.to(device, non_blocking=True)
+
+    # expand kmer codes to match signal time axis
+    kmer_expand = kmers.unsqueeze(2).expand(-1, -1, S).reshape(B, -1)  # (B, L*S)
+
+    x_mask = torch.isnan(signals)  # (B, L*S, 1)
+    false_mask = torch.zeros(
+        (*x_mask.shape[:-1], args.n_embed), device=device, dtype=torch.bool
     )
-    
+    x_mask = torch.cat([x_mask, false_mask], dim=-1)  # (B, L*S, 1+n_embed)
+
+    tpos     = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)  # (B, L*S)
+    x_static = tags.unsqueeze(-1)                                              # (B, 1)
+
     with torch.no_grad():
-        for batch in data_loader:
-            if batch is None:
-                LOGGER.info(f"Rank {rank}: batch is None")
-                continue
-            with autocast():
-                pred_str, accuracy, batch_num = _call_mods(batch, model, args.batch_size)
-            pred_str_q.put(pred_str)
-    
-    cleanup()
+        logits = model(signals, kmer_expand, x_mask, tpos, x_static)
+        probs  = torch.softmax(logits, dim=-1)
+        pred   = torch.argmax(logits, dim=1)
 
-def _call_mods_from_signal_gpu(
-    pod5_dr, bam_index, success_file, model_path, motif_seqs, positions, args, file_type
-):
-    
-    # dist.init_process_group(backend='nccl',init_method="tcp://127.0.0.1:12315",rank=0,world_size=4)
-    # local_rank, world_size = dist.get_rank(), dist.get_world_size()
-    # LOGGER.info(f"local_rank: {local_rank}, world_size: {world_size}")
-    
-    nproc = determine_process_count(args)
-    gpus=_get_gpus()
-    gpuindex = 0
-    device = torch.device(f"cuda:{gpus[gpuindex]}" if torch.cuda.is_available() else "cpu")
-    dataset = SignalDataset(pod5_dr, bam_index, motif_seqs, positions, device, args, file_type)
-    #sampler = DistributedSampler(dataset, shuffle=False)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=nproc,
-                        worker_init_fn=worker_init_fn,collate_fn=collate_fn_inference,#sampler=sampler,
-                        pin_memory=True
-                        )
-    
-    # 创建两个队列：一个用于传递特征批次，一个用于存储预测字符串
-    # features_batch_q = Queue()
-    pred_str_q = Queue()
+    probs_np = probs.cpu().numpy()
+    pred_np  = pred.cpu().numpy()
+    kmers_np = kmers.cpu().numpy()
 
-    # 启动写进程，将预测结果写入文件
-    p_w = mp.Process(
-        target=_write_predstr_to_file,
-        args=(args.result_file, pred_str_q),
-        name="writer",
-    )
-    p_w.daemon = True
-    p_w.start()
-    model=load_model(model_path,device, args)
+    out_lines = []
+    for i in range(len(batch_info)):
+        p0 = round(float(probs_np[i][0]), 6)
+        p1 = round(float(probs_np[i][1]), 6)
+        kseq   = "".join(code2base_dna[int(x)] for x in kmers_np[i])
+        c      = len(kseq) // 2
+        kmer5  = kseq[max(c - 2, 0):c + 3]
+        out_lines.append("\t".join([batch_info[i], str(p0), str(p1),
+                                    str(int(pred_np[i])), kmer5]))
 
-    # 初始化模型并设置到GPU
-    
-    model.eval()
-    with torch.no_grad() and torch.cuda.amp.autocast():
-        for batch in data_loader:
-            if batch is None:
-                print("batch is None")
-                continue
-            
-            pred_str, accuracy, batch_num = _call_mods(batch,model,args.batch_size)
-            if pred_str ==[]:
-                print("pred_str is empty")
-                continue
-            #pred_str=['test']
-            pred_str_q.put(pred_str)
+    if device.type == "cuda":
+        del kmers, signals, tags, logits, probs, pred, kmer_expand, x_mask, false_mask
+        torch.cuda.empty_cache()
 
-    # 在处理完成后，发送结束信号
-    # features_batch_q.put("kill")
-    pred_str_q.put("kill")
+    return out_lines
 
-    # # 等待所有进程结束
-    # for p in predstr_procs:
-    #     p.join()
 
-    p_w.join()
+def _run_batch_bilstm(batch_info, batch_k, batch_means, batch_stds,
+                      batch_lens, batch_s, device, model):
+    """
+    Run one forward pass for ModelBiLSTM.
+    Input tensors come from process_data_bilstm():
+        batch_k     : list of np.int64   (seq_len,)
+        batch_means : list of np.float32 (seq_len,)
+        batch_stds  : list of np.float32 (seq_len,)
+        batch_lens  : list of np.int32   (seq_len,)
+        batch_s     : list of np.float32 (seq_len, signal_len)
+    """
+    kmers   = torch.stack(batch_k).to(device, non_blocking=True)      # (B, L)
+    means   = torch.stack(batch_means).to(device, non_blocking=True)  # (B, L)
+    stds    = torch.stack(batch_stds).to(device, non_blocking=True)   # (B, L)
+    lens    = torch.stack(batch_lens).to(device, non_blocking=True)   # (B, L)
+    signals = torch.stack(batch_s).to(device, non_blocking=True)      # (B, L, S)
 
-def _call_mods_from_signal_cpu(files_dr, bam_index, success_file, model_path, motif_seqs, positions, files_queue, args, file_type):
-    nproc = determine_process_count(args)
-    dataset = SignalDataset(files_dr, bam_index, motif_seqs, positions, 'cpu', files_queue, args, format_type=file_type)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=nproc,
-                             worker_init_fn=worker_init_fn, collate_fn=collate_fn_inference)
-    
-    pred_str_q = Queue()
-    p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q), name="writer")
-    p_w.daemon = True
-    p_w.start()
-    model = load_model(model_path, 'cpu', args)
-    model.eval()
-    
     with torch.no_grad():
-        for batch in data_loader:
-            if batch is None:
-                print("batch is None")
-                continue
-            pred_str, accuracy, batch_num = _call_mods(batch, model, args.batch_size)
-            if pred_str == []:
-                print("pred_str is empty")
-                continue
-            pred_str_q.put(pred_str)
-    
-    pred_str_q.put("kill")
-    p_w.join()
+        # ModelBiLSTM.forward returns (logits, softmax_probs)
+        _, probs = model(kmers.long(), means, stds, lens, signals)
+        pred = torch.argmax(probs, dim=1)
 
-def _call_mods_from_fast5s_gpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, chrom2seqs, model_path, success_file, read_strand, args, aligner):
-    nproc = determine_process_count(args)
-    gpus = _get_gpus()
-    device = torch.device(f"cuda:{gpus[0]}" if torch.cuda.is_available() else "cpu")
-    dataset = Fast5Dataset(fast5s_q, motif_seqs, positions, device, args, chrom2len, read_strand, chrom2seqs, aligner)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=nproc,
-                             worker_init_fn=worker_init_fn, collate_fn=collate_fn_inference, pin_memory=True)
-    
-    pred_str_q = Queue()
-    p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q), name="writer")
-    p_w.daemon = True
-    p_w.start()
-    model = load_model(model_path, device, args)
+    probs_np = probs.cpu().numpy()
+    pred_np  = pred.cpu().numpy()
+    kmers_np = kmers.cpu().numpy()
+
+    out_lines = []
+    for i in range(len(batch_info)):
+        p0 = round(float(probs_np[i][0]), 6)
+        p1 = round(float(probs_np[i][1]), 6)
+        kseq  = "".join(code2base_dna[int(x)] for x in kmers_np[i])
+        c     = len(kseq) // 2
+        kmer5 = kseq[max(c - 2, 0):c + 3]
+        out_lines.append("\t".join([batch_info[i], str(p0), str(p1),
+                                    str(int(pred_np[i])), kmer5]))
+
+    if device.type == "cuda":
+        del kmers, means, stds, lens, signals, probs, pred
+        torch.cuda.empty_cache()
+
+    return out_lines
+
+
+# ─────────────────────────────────────────────
+# Unified model worker  (GPU rank or CPU)
+# ─────────────────────────────────────────────
+
+def model_worker(rank, device, queue, pred_q, args, nproc_io):
+    """
+    Consume feature items from queue, run inference, push result lines to pred_q.
+    Works for both GPU (device=cuda:N) and CPU (device=cpu).
+    Works for both modelMTM and ModelBiLSTM (controlled by args.model_class).
+    """
+    if device.type == "cuda":
+        torch.cuda.set_device(device.index)
+        torch.backends.cudnn.benchmark = True
+
+    is_mtm = (args.model_class == "mtm")
+
+    if is_mtm:
+        model = load_model_mtm(args, device)
+    else:
+        model = load_model_bilstm(args, device)
     model.eval()
-    
-    with torch.no_grad() and torch.cuda.amp.autocast():
-        for batch in data_loader:
-            if batch is None:
-                print("batch is None")
-                continue
-            pred_str, accuracy, batch_num = _call_mods(batch, model, args.batch_size)
-            if pred_str == []:
-                print("pred_str is empty")
-                continue
-            pred_str_q.put(pred_str)
-    
-    pred_str_q.put("kill")
-    p_w.join()
 
-def _call_mods_from_fast5s_cpu(ref_path, motif_seqs, chrom2len, fast5s_q, len_fast5s, positions, chrom2seqs, model_path, success_file, read_strand, args, aligner=None):
-    pass  # Implement if needed
+    # ── batch buffers ──────────────────────────────
+    batch_info = []
+    batch_k, batch_s = [], []
+    batch_t = []                                        # MTM only: proximity tag
+    batch_means, batch_stds, batch_lens = [], [], []    # BiLSTM only
+    end_count = 0
 
-def _call_mods_from_file_gpu(input_path, model_path, args):
-    nproc = determine_process_count(args)
-    gpus = _get_gpus()
-    device = torch.device(f"cuda:{gpus[0]}" if torch.cuda.is_available() else "cpu")
-    dataset = TsvDataset(input_path)
-    data_loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=nproc,
-                             worker_init_fn=worker_init_fn, collate_fn=collate_fn_inference, pin_memory=True)
-    
-    pred_str_q = Queue()
-    p_w = mp.Process(target=_write_predstr_to_file, args=(args.result_file, pred_str_q), name="writer")
-    p_w.daemon = True
-    p_w.start()
-    model = load_model(model_path, device, args)
-    model.eval()
-    
-    with torch.no_grad() and torch.cuda.amp.autocast():
-        for batch in data_loader:
-            if batch is None:
-                print("batch is None")
-                continue
-            pred_str, accuracy, batch_num = _call_mods(batch, model, args.batch_size)
-            if pred_str == []:
-                print("pred_str is empty")
-                continue
-            pred_str_q.put(pred_str)
-    
-    pred_str_q.put("kill")
-    p_w.join()
-
-def _call_mods(features_batch, model, batch_size, device=0):
-    sampleinfo, kmers, base_means, base_stds, base_signal_lens, k_signals, labels = features_batch
-    pred_str = []
-    accuracys = []
-    batch_num = 0
-    
-    for i in np.arange(0, len(sampleinfo), batch_size):
-        batch_s, batch_e = i, i + batch_size
-        b_sampleinfo = sampleinfo[batch_s:batch_e]
-        b_kmers = kmers[batch_s:batch_e]
-        b_base_means = base_means[batch_s:batch_e]
-        b_base_stds = base_stds[batch_s:batch_e]
-        b_base_signal_lens = base_signal_lens[batch_s:batch_e]
-        b_k_signals = k_signals[batch_s:batch_e]
-        b_labels = labels[batch_s:batch_e]
-        
-        if len(b_sampleinfo) > 0:
-            _, _, _, vlogits = model(
-                b_kmers.cuda(non_blocking=True), b_base_means.cuda(non_blocking=True),
-                b_base_stds.cuda(non_blocking=True), b_base_signal_lens.cuda(non_blocking=True),
-                b_k_signals.cuda(non_blocking=True)
+    def flush():
+        if not batch_info:
+            return
+        if is_mtm:
+            lines = _run_batch_mtm(
+                batch_info, batch_k, batch_s, batch_t,
+                args, device, model,
             )
-            _, vpredicted = torch.max(vlogits.data, 1)
-            if use_cuda:
-                vlogits = vlogits.cpu()
-                vpredicted = vpredicted.cpu()
-            
-            predicted = vpredicted.numpy()
-            logits = vlogits.data.numpy()
-            acc_batch = metrics.accuracy_score(y_true=b_labels, y_pred=predicted)
-            accuracys.append(acc_batch)
-            
-            for idx in range(len(b_sampleinfo)):
-                prob_0, prob_1 = logits[idx][0], logits[idx][1]
-                prob_0_norm = round(prob_0 / (prob_0 + prob_1), 6)
-                prob_1_norm = round(1 - prob_0_norm, 6)
-                b_idx_kmer = "".join([code2base_dna[int(x)] for x in b_kmers[idx]])
-                center_idx = int(np.floor(len(b_idx_kmer) / 2))
-                bkmer_start = center_idx - 2 if center_idx - 2 >= 0 else 0
-                bkmer_end = center_idx + 3 if center_idx + 3 <= len(b_idx_kmer) else len(b_idx_kmer)
-                
-                pred_str.append(
-                    "\t".join([b_sampleinfo[idx], str(prob_0_norm), str(prob_1_norm), str(predicted[idx]), b_idx_kmer[bkmer_start:bkmer_end]])
-                )
-            batch_num += 1
-    
-    accuracy = np.mean(accuracys) if len(accuracys) > 0 else 0
-    return pred_str, accuracy, batch_num
+        else:
+            lines = _run_batch_bilstm(
+                batch_info, batch_k, batch_means, batch_stds,
+                batch_lens, batch_s, device, model,
+            )
+        if lines:
+            pred_q.put(lines)
+        batch_info.clear(); batch_k.clear(); batch_s.clear(); batch_t.clear()
+        batch_means.clear(); batch_stds.clear(); batch_lens.clear()
 
-def _write_predstr_to_file(write_fp, predstr_q):
-    LOGGER.info("write_process-{} starts".format(os.getpid()))
-    with open(write_fp, "w") as wf:
-        while True:
-            if predstr_q.empty():
-                time.sleep(time_wait)
-                continue
-            pred_str = predstr_q.get()
-            if pred_str == "kill":
-                LOGGER.info("write_process-{} finished".format(os.getpid()))
+    # ── main loop ──────────────────────────────────
+    while True:
+        item = queue.get()
+
+        if item is None:
+            end_count += 1
+            if end_count == nproc_io:
                 break
-            for one_pred_str in pred_str:
-                wf.write(one_pred_str + "\n")
-            wf.flush()
+            continue
+
+        items = item if isinstance(item, list) else [item]
+
+        for sub in items:
+            if is_mtm:
+                # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
+                # label (sub[3]) discarded – not needed for inference
+                batch_info.append(sub[0])
+                batch_k.append(torch.from_numpy(np.asarray(sub[1], dtype=np.int64)))
+                batch_s.append(torch.from_numpy(np.asarray(sub[2], dtype=np.float32)))
+                batch_t.append(sub[4])
+            else:
+                # sub = (sampleinfo, k_seq, means, stds, lens, k_signals_rect, label)
+                # label (sub[6]) discarded – not needed for inference
+                batch_info.append(sub[0])
+                batch_k.append(torch.from_numpy(np.asarray(sub[1], dtype=np.int64)))
+                batch_means.append(torch.from_numpy(np.asarray(sub[2], dtype=np.float32)))
+                batch_stds.append(torch.from_numpy(np.asarray(sub[3], dtype=np.float32)))
+                batch_lens.append(torch.from_numpy(np.asarray(sub[4], dtype=np.float32)))
+                batch_s.append(torch.from_numpy(np.asarray(sub[5], dtype=np.float32)))
+
+            if len(batch_info) >= args.batch_size:
+                flush()
+
+    # flush tail batch
+    flush()
+    print(f"[Worker-{rank}({device})] done", flush=True)
+
+
+# ─────────────────────────────────────────────
+# TSV producer  (reads pre-extracted feature file)
+# ─────────────────────────────────────────────
+
+def tsv_producer(tsv_file, queues, args):
+    """
+    Read a pre-extracted feature TSV (or .gz) and distribute items to model workers.
+    Supports both MTM and BiLSTM output formats automatically.
+
+    TSV columns (12):
+        chrom, pos, strand, loc_in_strand, readname, read_loc,
+        k_mer, signal_means, signal_stds, signal_lens, k_signals_rect, label
+    """
+    import random
+    import gzip
+
+    is_mtm = (args.model_class == "mtm")
+    n_workers = len(queues)
+    BUF_SIZE = 128
+    buffers = [[] for _ in range(n_workers)]
+
+    open_fn = gzip.open if tsv_file.endswith(".gz") else open
+    with open_fn(tsv_file, "rt") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            words = line.split("\t")
+            if len(words) < 12:
+                continue
+
+            sampleinfo = "\t".join(words[:6])
+            k_mer = words[6]
+            k_seq = np.fromiter(
+                (base2code_dna[x] for x in k_mer),
+                dtype=np.int64, count=len(k_mer),
+            )
+            k_signals = np.array(
+                [[float(y) for y in x.split(",")] for x in words[10].split(";")],
+                dtype=np.float32,
+            )
+            label = int(words[11])
+
+            if is_mtm:
+                # tag not stored in TSV → default 1 (no proximity filtering)
+                item = (sampleinfo, k_seq, k_signals, label, 1)
+            else:
+                means = np.array([float(x) for x in words[7].split(",")], dtype=np.float32)
+                stds  = np.array([float(x) for x in words[8].split(",")], dtype=np.float32)
+                lens  = np.array([int(x)   for x in words[9].split(",")], dtype=np.int32)
+                item  = (sampleinfo, k_seq, means, stds, lens, k_signals, label)
+
+            qid = random.randint(0, n_workers - 1)
+            buffers[qid].append(item)
+            if len(buffers[qid]) >= BUF_SIZE:
+                queues[qid].put(buffers[qid])
+                buffers[qid] = []
+
+    for qid in range(n_workers):
+        if buffers[qid]:
+            queues[qid].put(buffers[qid])
+
+    print("[TSV-Producer] done", flush=True)
+
+
+# ─────────────────────────────────────────────
+# Writer process
+# ─────────────────────────────────────────────
+
+def writer(out_file, pred_q):
+    with open(out_file, "w") as f:
+        while True:
+            item = pred_q.get()
+            if item == "kill":
+                break
+            f.write("\n".join(item) + "\n")
+
+
+# ─────────────────────────────────────────────
+# Main entry point
+# ─────────────────────────────────────────────
+
+def inference_ultra(args):
+    """
+    Unified inference pipeline.
+    - Input:  pod5 / slow5 / fast5 directory, or pre-extracted TSV file
+    - Model:  modelMTM (args.model_class='mtm') or ModelBiLSTM (args.model_class='bilstm')
+    - Device: all available GPUs; falls back to CPU when none found or --use_cpu set
+    """
+    mp.set_start_method("spawn", force=True)
+
+    # ── device selection ──────────────────────────
+    num_gpu = torch.cuda.device_count()
+    use_gpu = num_gpu > 0 and not getattr(args, "use_cpu", False)
+
+    if use_gpu:
+        devices = [torch.device(f"cuda:{i}") for i in range(num_gpu)]
+        LOGGER.info(f"Using {num_gpu} GPU(s): {devices}")
+    else:
+        devices = [torch.device("cpu")]
+        LOGGER.info("No GPU available or --use_cpu set. Running on CPU.")
+
+    n_workers = len(devices)
+    nproc_io  = max(1, args.nproc)
+
+    queues = [mp.Queue(256) for _ in range(n_workers)]
+    pred_q = mp.Queue(512)
+
+    # ── detect input type ─────────────────────────
+    input_path = args.input_path
+    is_tsv = os.path.isfile(input_path) and (
+        input_path.endswith(".tsv") or input_path.endswith(".gz")
+    )
+
+    producers   = []
+    _nproc_io_actual = nproc_io  # used for end-signal count
+
+    if is_tsv:
+        LOGGER.info(f"TSV input detected: {input_path}")
+        p = mp.Process(
+            target=tsv_producer,
+            args=(input_path, queues, args),
+        )
+        p.start()
+        producers.append(p)
+        _nproc_io_actual = 1  # single TSV reader
+
+    else:
+        file_type = detect_file_type(input_path, True)
+        files = get_files(input_path, True, file_type)
+        LOGGER.info(f"Signal input: {len(files)} {file_type} files, "
+                    f"{nproc_io} IO worker(s)")
+
+        motif_seqs = get_motif_seqs(args.motifs, True)
+        positions  = read_position_file(args.positions) if args.positions else None
+
+        for i in range(nproc_io):
+            p = mp.Process(
+                target=producer,
+                args=(i, files, queues, args, motif_seqs, positions,
+                      file_type, n_workers, nproc_io),
+            )
+            p.start()
+            producers.append(p)
+
+    # ── model workers ─────────────────────────────
+    workers = []
+    for rank, device in enumerate(devices):
+        p = mp.Process(
+            target=model_worker,
+            args=(rank, device, queues[rank], pred_q, args, _nproc_io_actual),
+        )
+        p.start()
+        workers.append(p)
+
+    # ── writer ────────────────────────────────────
+    p_writer = mp.Process(target=writer, args=(args.result_file, pred_q))
+    p_writer.start()
+
+    # ── wait for producers ────────────────────────
+    for p in producers:
+        p.join()
+    LOGGER.info("All producers done.")
+
+    # send end signals  (one None per IO worker per model worker queue)
+    for q in queues:
+        for _ in range(_nproc_io_actual):
+            q.put(None)
+
+    for p in workers:
+        p.join()
+
+    pred_q.put("kill")
+    p_writer.join()
+
+    LOGGER.info("ALL DONE")
+
+
+# ─────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser("call modifications")
-    p_input = parser.add_argument_group("INPUT")
-    p_input.add_argument("--input_path", "-i", type=str, required=True, help="the input path (signal_feature file or directory of fast5/pod5/slow5 files)")
-    p_input.add_argument("--r_batch_size", type=int, default=50, help="number of files to process per batch, default 50")
-    p_input.add_argument("--bam", type=str, help="the bam filepath")
+    parser = argparse.ArgumentParser(
+        "deepsignal3 call_mods – unified inference (modelMTM / BiLSTM)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
 
-    p_call = parser.add_argument_group("CALL")
-    p_call.add_argument("--model_path", "-m", type=str, required=True, help="path to the trained model (.ckpt)")
-    p_call.add_argument("--model_type", type=str, default="both_bilstm", choices=["both_bilstm", "seq_bilstm", "signal_bilstm"], help="type of model, default: both_bilstm")
-    p_call.add_argument("--seq_len", type=int, default=21, help="len of kmer, default 21")
-    p_call.add_argument("--signal_len", type=int, default=15, help="signal num of one base, default 15")
-    p_call.add_argument("--layernum1", type=int, default=3, help="lstm layer num for combined feature, default 3")
-    p_call.add_argument("--layernum2", type=int, default=1, help="lstm layer num for seq feature, default 1")
-    p_call.add_argument("--class_num", type=int, default=2)
-    p_call.add_argument("--dropout_rate", type=float, default=0)
-    p_call.add_argument("--n_vocab", type=int, default=16, help="base_seq vocab_size, default 16")
-    p_call.add_argument("--n_embed", type=int, default=4, help="base_seq embedding_size")
-    p_call.add_argument("--is_base", type=str, default="yes", help="use base features in seq model, default yes")
-    p_call.add_argument("--is_signallen", type=str, default="yes", help="use signal length feature, default yes")
-    p_call.add_argument("--is_trace", type=str, default="no", help="use trace feature, default no")
-    p_call.add_argument("--batch_size", "-b", type=int, default=512, help="batch size, default 512")
-    p_call.add_argument("--hid_rnn", type=int, default=256, help="BiLSTM hidden_size, default 256")
+    # ── Input ──────────────────────────────────────
+    p_in = parser.add_argument_group("INPUT")
+    p_in.add_argument("--input_path", "-i", required=True,
+                      help="Signal directory (pod5/slow5/fast5) or pre-extracted TSV file")
+    p_in.add_argument("--bam", type=str, default=None,
+                      help="BAM file (required for pod5/slow5/fast5 input)")
+    p_in.add_argument("--recursively", "-r", type=str, default="yes",
+                      help="Search files recursively")
 
-    p_output = parser.add_argument_group("OUTPUT")
-    p_output.add_argument("--result_file", "-o", type=str, required=True, help="path to save the predicted result")
+    # ── Output ─────────────────────────────────────
+    p_out = parser.add_argument_group("OUTPUT")
+    p_out.add_argument("--result_file", "-o", required=True,
+                       help="Path to write prediction results")
 
-    p_f5 = parser.add_argument_group("EXTRACTION")
-    p_f5.add_argument("--single", action="store_true", default=False, help="fast5 files are in single-read format")
-    p_f5.add_argument("--recursively", "-r", type=str, default="yes", help="find files recursively, default yes")
-    p_f5.add_argument("--rna", action="store_true", default=False, help="fast5 files are from RNA samples")
-    p_f5.add_argument("--basecall_group", type=str, default=None, help="basecall group from Guppy")
-    p_f5.add_argument("--basecall_subgroup", type=str, default="BaseCalled_template", help="basecall subgroup, default BaseCalled_template")
-    p_f5.add_argument("--reference_path", type=str, help="reference file (.fa)")
-    p_f5.add_argument("--normalize_method", type=str, choices=["mad", "zscore"], default="mad", help="signal normalization method, default mad")
-    p_f5.add_argument("--methy_label", type=int, choices=[1, 0], default=1, help="label of modified bases, default 1")
-    p_f5.add_argument("--motifs", type=str, default="CG", help="motif seq to extract, default CG")
-    p_f5.add_argument("--mod_loc", type=int, default=0, help="0-based location of targeted base in motif, default 0")
-    p_f5.add_argument("--pad_only_r", action="store_true", default=False, help="pad zeros only to right of signals")
-    p_f5.add_argument("--positions", type=str, default=None, help="file with list of positions")
-    p_f5.add_argument("--trace", action="store_true", default=False, help="use trace, default false")
+    # ── Model selection ────────────────────────────
+    p_model = parser.add_argument_group("MODEL")
+    p_model.add_argument("--model_path", "-m", required=True,
+                         help="Path to trained model checkpoint (.ckpt)")
+    p_model.add_argument("--model_class", type=str, default="mtm",
+                         choices=["mtm", "bilstm"],
+                         help="Model architecture: 'mtm' (modelMTM) or 'bilstm' (ModelBiLSTM)")
+    p_model.add_argument("--use_compile", type=str2bool, default="no",
+                         help="Enable torch.compile (PyTorch >= 2.0, may speed up GPU inference)")
+    p_model.add_argument("--use_cpu", action="store_true", default=False,
+                         help="Force CPU inference even when GPUs are available")
 
-    p_mape = parser.add_argument_group("MAPe")
-    p_mape.add_argument("--corrected_group", type=str, default="RawGenomeCorrected_000", help="corrected_group of fast5 files")
+    # ── Shared hyper-params (both models) ──────────
+    p_hp = parser.add_argument_group("MODEL_HYPER")
+    p_hp.add_argument("--seq_len",      type=int,   default=21,
+                      help="K-mer length (must be odd)")
+    p_hp.add_argument("--signal_len",   type=int,   default=15,
+                      help="Signals per base")
+    p_hp.add_argument("--class_num",    type=int,   default=2)
+    p_hp.add_argument("--dropout_rate", type=float, default=0.0)
+    p_hp.add_argument("--n_vocab",      type=int,   default=16,
+                      help="Base vocabulary size")
+    p_hp.add_argument("--n_embed",      type=int,   default=4,
+                      help="Base embedding dimension")
+    p_hp.add_argument("--hid_rnn",      type=int,   default=256,
+                      help="Hidden size (BiLSTM) / d_model (MTM)")
 
-    p_mapping = parser.add_argument_group("MAPPING")
-    p_mapping.add_argument("--mapping", action="store_true", default=False, help="use mapping to get alignment")
-    p_mapping.add_argument("--mapq", type=int, default=1, help="mapping quality cutoff, default 1")
-    p_mapping.add_argument("--identity", type=float, default=0.0, help="identity cutoff, default 0.0")
-    p_mapping.add_argument("--coverage_ratio", type=float, default=0.50, help="coverage percent, default 0.50")
-    p_mapping.add_argument("--best_n", "-n", type=int, default=1, help="best_n arg in mappy, default 1")
+    # ── BiLSTM-specific ────────────────────────────
+    p_lstm = parser.add_argument_group("BILSTM_HYPER")
+    p_lstm.add_argument("--model_type",   type=str, default="both_bilstm",
+                        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+                        help="BiLSTM variant (ignored for MTM)")
+    p_lstm.add_argument("--layernum1",    type=int, default=3)
+    p_lstm.add_argument("--layernum2",    type=int, default=1)
+    p_lstm.add_argument("--is_base",      type=str, default="yes")
+    p_lstm.add_argument("--is_signallen", type=str, default="yes")
+    p_lstm.add_argument("--is_trace",     type=str, default="no")
 
-    parser.add_argument("--nproc", "-p", type=int, default=10, help="number of processes, default 10")
-    parser.add_argument("--nproc_gpu", type=int, default=2, help="number of processes to use gpu, default 2")
+    # ── MTM-specific ───────────────────────────────
+    p_mtm = parser.add_argument_group("MTM_HYPER")
+    p_mtm.add_argument("--mtm_num_base_features", type=int,   default=1)
+    p_mtm.add_argument("--mtm_d_static",          type=int,   default=0)
+    p_mtm.add_argument("--mtm_ratios",    nargs="+", type=int, default=[2, 2, 2])
+    p_mtm.add_argument("--mtm_r_hid",             type=int,   default=4)
+    p_mtm.add_argument("--mtm_norm_first",  type=str2bool,    default="True")
+    p_mtm.add_argument("--mtm_down_mode",   type=str,         default="concat",
+                        choices=["concat", "avg", "max"])
+    p_mtm.add_argument("--mtm_temporal_depth", type=int,      default=2)
+
+    # ── Extraction / mapping ───────────────────────
+    p_ext = parser.add_argument_group("EXTRACTION")
+    p_ext.add_argument("--motifs",           type=str,   default="CG")
+    p_ext.add_argument("--mod_loc",          type=int,   default=0)
+    p_ext.add_argument("--methy_label",      type=int,   default=1, choices=[0, 1])
+    p_ext.add_argument("--normalize_method", type=str,   default="mad",
+                        choices=["mad", "zscore"])
+    p_ext.add_argument("--mapq",             type=int,   default=1)
+    p_ext.add_argument("--coverage_ratio",   type=float, default=0.5)
+    p_ext.add_argument("--identity",         type=float, default=0.0)
+    p_ext.add_argument("--positions",        type=str,   default=None,
+                        help="Position filter file")
+    p_ext.add_argument("--rna",              action="store_true", default=False)
+
+    # ── Performance ────────────────────────────────
+    p_perf = parser.add_argument_group("PERFORMANCE")
+    p_perf.add_argument("--batch_size", "-b", type=int, default=512)
+    p_perf.add_argument("--nproc",      "-p", type=int, default=4,
+                         help="Number of IO producer processes")
 
     args = parser.parse_args()
     display_args(args)
-    call_mods(args)
+    inference_ultra(args)
+
 
 if __name__ == "__main__":
     sys.exit(main())

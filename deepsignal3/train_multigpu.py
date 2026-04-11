@@ -12,10 +12,13 @@ import re
 
 from .models import (
     ModelBiLSTM, 
+    AggrAttRNN,
+    modelMTM
 )
 from .dataloader import (
     SignalFeaData1s,
     generate_offsets,
+    AggregateDataset,
 )
 from .dataloader import clear_linecache
 from .utils.process_utils import display_args
@@ -28,10 +31,15 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
+from datetime import timedelta
+from torch.cuda.amp import autocast, GradScaler # [新增] 引入混合精度
+from scipy.stats import pearsonr, spearmanr
+
 # add this export temporarily
 # https://github.com/pytorch/pytorch/issues/37377
 os.environ['MKL_THREADING_LAYER'] = 'GNU'
 
+torch.set_float32_matmul_precision('high')
 
 # https://zhuanlan.zhihu.com/p/350301395
 # https://github.com/tczhangzhi/pytorch-distributed/blob/master/multiprocessing_distributed.py
@@ -362,6 +370,569 @@ def train_worker(local_rank, global_world_size, args):
     clear_linecache()
     cleanup()
 
+def train_worker_mtm(local_rank, global_world_size, args):
+    """
+    分布式训练函数 (MTM)，集成 AdamW、Compile 优化，并自动清洗保存的模型权重 Key
+    [修改] 已移除 AMP (混合精度) 以防止 NaN
+    """
+    global_rank = args.node_rank * args.ngpus_per_node + local_rank
+
+    # 1. 初始化分布式环境
+    dist.init_process_group(
+        backend="nccl",
+        init_method=args.dist_url,
+        world_size=global_world_size,
+        rank=global_rank,
+        timeout=timedelta(minutes=30)
+    )
+
+    sys.stderr.write(f"训练进程-{os.getpid()} [初始化] == 本地 rank: {local_rank}, 全局 rank: {global_rank} ==\n")
+
+    # 2. 目录清理与初始化 (仅主进程执行)
+    if global_rank == 0 or args.epoch_sync:
+        model_dir = args.model_dir
+        if model_dir != "/":
+            model_dir = os.path.abspath(model_dir).rstrip("/")
+            if local_rank == 0:
+                if not os.path.exists(model_dir):
+                    os.makedirs(model_dir)
+                else:
+                    # 清理旧的 checkpoint
+                    model_regex = re.compile(
+                        r"" + args.model_type + r"\.b\d+_s\d+_p\d+_epoch\d+\.ckpt*"
+                    )
+                    for mfile in os.listdir(model_dir):
+                        if model_regex.match(mfile) is not None:
+                            os.remove(os.path.join(model_dir, mfile))
+            model_dir += "/"
+
+    # 3. 初始化模型
+    num_chn = args.mtm_num_base_features + args.n_embed
+    
+    # 注意：这里使用了之前优化过的 MTM 结构参数
+    # 如果你的 args 中还没有 temporal_depth，请确保在 parser 中添加或给默认值
+    temporal_depth = getattr(args, 'mtm_temporal_depth', 2) 
+
+    model = modelMTM(
+        num_chn=num_chn,
+        d_static=args.mtm_d_static,
+        num_cls=args.class_num,
+        ratios=args.mtm_ratios,
+        d_model=args.hid_rnn,
+        r_hid=args.mtm_r_hid,
+        drop=args.dropout_rate,
+        norm_first=args.mtm_norm_first,
+        down_mode=args.mtm_down_mode,
+        vocab_size=args.n_vocab, 
+        embedding_size=args.n_embed,
+        temporal_depth=temporal_depth # 传入层数
+    )
+
+    # 4. 移动到 GPU
+    torch.cuda.set_device(local_rank)
+    model = model.cuda(local_rank)
+
+    # 5. [关键优化] torch.compile
+    # 放在 DDP 之前
+    if str2bool(args.use_compile):
+        try:
+            sys.stderr.write(f"训练进程-{os.getpid()} 正在编译模型 (torch.compile)...\n")
+            model = torch.compile(model, mode="default")
+        except Exception as e:
+            sys.stderr.write(f"Warning: torch.compile 失败，回退到 eager 模式。错误: {e}\n")
+
+    # 6. DDP 包装
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+
+    # 7. 数据加载
+    sys.stderr.write(f"训练进程-{os.getpid()} 读取数据..\n")
+    
+    train_linenum = count_line_num(args.train_file, False)
+    train_offsets = generate_offsets(args.train_file)
+    train_dataset = SignalFeaData1s(args.train_file, train_offsets, train_linenum)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.dl_num_workers,
+        pin_memory=True,
+        sampler=train_sampler
+    )
+
+    valid_linenum = count_line_num(args.valid_file, False)
+    valid_offsets = generate_offsets(args.valid_file)
+    valid_dataset = SignalFeaData1s(args.valid_file, valid_offsets, valid_linenum)
+    valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(
+        dataset=valid_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.dl_num_workers,
+        pin_memory=True,
+        sampler=valid_sampler
+    )
+
+    # 8. 损失函数与优化器
+    weight_rank = torch.from_numpy(np.array([1, args.pos_weight])).float().cuda(local_rank)
+    criterion = nn.CrossEntropyLoss(weight=weight_rank)
+
+    # [优化] 使用 AdamW
+    all_params = list(model.module.parameters())
+    weight_decay = 0.01 # 默认给个合理的 weight_decay
+    
+    if args.optim_type == "Adam":
+        optimizer = torch.optim.Adam(all_params, lr=args.lr)
+    elif args.optim_type == "RMSprop":
+        optimizer = torch.optim.RMSprop(all_params, lr=args.lr, weight_decay=weight_decay)
+    elif args.optim_type == "SGD":
+        optimizer = torch.optim.SGD(all_params, lr=args.lr, momentum=0.8, weight_decay=weight_decay)
+    elif args.optim_type == "AdamW":
+        optimizer = torch.optim.AdamW(all_params, lr=args.lr, weight_decay=weight_decay)
+
+    # [优化] 使用 CosineAnnealingLR (带 Warmup 效果更好，这里先用 Cosine)
+    if args.lr_scheduler == "StepLR":
+        scheduler = StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay)
+    elif args.lr_scheduler == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
+                                      patience=args.lr_patience, verbose=True)
+    elif args.lr_scheduler == "CosineAnnealingLR":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
+
+    # [优化] 初始化 AMP Scaler
+    # scaler = GradScaler() # [注释] 不使用 Scaler
+
+    # 9. 训练循环变量
+    total_step = len(train_loader)
+    sys.stderr.write(f"训练进程-{os.getpid()} 总步数: {total_step}\n")
+    
+    curr_best_accuracy = 0
+    curr_best_accuracy_loc = 0
+    curr_lowest_loss = 10000
+    v_accuracy_epoches = []
+
+    v_best_score_epoches=[]
+    curr_best_score = 0
+    curr_best_score_loc = 0
+    # 辅助函数：清洗 state_dict 中的 compile 前缀
+    def clean_state_dict(state_dict):
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            # 移除 torch.compile 产生的 _orig_mod. 前缀
+            new_key = k.replace("_orig_mod.", "")
+            new_state_dict[new_key] = v
+        return new_state_dict
+
+    model.train()
+    patience = args.patience 
+    no_improve_count = 0
+
+    for epoch in range(args.max_epoch_num):
+        train_loader.sampler.set_epoch(epoch)
+        
+        tlosses = []
+        start = time.time()
+        
+        for i, sfeatures in enumerate(train_loader):
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, tags = sfeatures
+            
+            # 数据截取
+            train_kmer = kmer[:, args.bias:args.seq_len+args.bias]
+            train_signals = signals[:, args.bias:args.seq_len+args.bias, :]
+
+            # 数据上 GPU
+            train_kmer = train_kmer.cuda(local_rank, non_blocking=True).long()
+            train_signals = train_signals.cuda(local_rank, non_blocking=True).float()
+            labels = labels.cuda(local_rank, non_blocking=True).long()
+            tags = tags.cuda(local_rank, non_blocking=True).long()
+
+            # 数据 Reshape 与 Mask 构造
+            batch_size = train_signals.shape[0]
+            seq_len = args.seq_len
+            signal_len = args.signal_len
+            
+            # (B, 21, S) -> (B, 21*S, 1)
+            signals_view = train_signals.view(batch_size, -1, 1)
+            kmer_expand = train_kmer.repeat_interleave(signal_len, dim=1)
+            
+            x_mask = torch.isnan(signals_view)
+            false_mask = torch.zeros((*x_mask.shape[:-1], args.n_embed), dtype=torch.bool, device=x_mask.device)
+            x_mask = torch.cat([x_mask, false_mask], dim=-1)
+
+            t = torch.arange(seq_len * signal_len, device=signals_view.device).repeat(batch_size, 1)
+            x_static = tags.unsqueeze(-1)
+
+            optimizer.zero_grad()
+
+            # [优化] 混合精度前向
+            # with autocast(): # [注释] 关闭 autocast
+            outputs = model(
+                signals_view, kmer_expand, x_mask, t, x_static,
+            )
+            loss = criterion(outputs, labels)
+
+            # [优化] 混合精度反向与更新
+            # scaler.scale(loss).backward() # [注释]
+            loss.backward() # [新增] 标准反向传播
+
+            # scaler.unscale_(optimizer) # Unscale 用于梯度裁剪 [注释]
+            
+            torch.nn.utils.clip_grad_norm_(all_params, 1.0)
+            
+            # scaler.step(optimizer) # [注释]
+            optimizer.step() # [新增] 标准更新
+
+            # scaler.update() # [注释]
+
+            tlosses.append(loss.detach().item())
+
+            # 打印日志
+            if global_rank == 0 and ((i + 1) % args.step_interval == 0 or (i + 1) == total_step):
+                time_cost = time.time() - start
+                sys.stderr.write(
+                    f"轮次 [{epoch + 1}/{args.max_epoch_num}]，步数 [{i + 1}/{total_step}]；"
+                    f"损失: {np.mean(tlosses):.4f}；时间: {time_cost:.2f}s\n"
+                )
+                sys.stderr.flush()
+                start = time.time()
+                tlosses = []
+
+        # ------------------------------------------------------------------
+        # 验证阶段
+        # ------------------------------------------------------------------
+        model.eval()
+        with torch.no_grad():
+            vlosses, vlabels_total, vpredicted_total = [], [], []
+            for vi, vsfeatures in enumerate(valid_loader):
+                _, vkmer, vbase_means, vbase_stds, vbase_signal_lens, vsignals, vlabels, vtags = vsfeatures
+                
+                vtrain_kmer = vkmer[:, args.bias:args.seq_len+args.bias]
+                vtrain_signals = vsignals[:, args.bias:args.seq_len+args.bias, :]
+
+                vtrain_kmer = vtrain_kmer.cuda(local_rank, non_blocking=True).long()
+                vtrain_signals = vtrain_signals.cuda(local_rank, non_blocking=True).float()
+                vlabels = vlabels.cuda(local_rank, non_blocking=True).long()
+                vtags = vtags.cuda(local_rank, non_blocking=True).long()
+
+                batch_size = vtrain_signals.shape[0]
+                vsignals = vtrain_signals.view(batch_size, -1, 1)
+                vkmer = vtrain_kmer.repeat_interleave(signal_len, dim=1)
+
+                vx_mask = torch.isnan(vsignals)
+                vfalse_mask = torch.zeros((*vx_mask.shape[:-1], args.n_embed), dtype=torch.bool, device=vx_mask.device)
+                vx_mask = torch.cat([vx_mask, vfalse_mask], dim=-1)
+                vt = torch.arange(seq_len * signal_len, device=vsignals.device).repeat(batch_size, 1)
+                vx_static = vtags.unsqueeze(-1)
+
+                # [优化] 验证也开启 autocast 加速
+                # with autocast(): # [注释] 关闭 autocast
+                voutputs = model(
+                    vsignals, vkmer, vx_mask, vt, vx_static,
+                )
+                vloss = criterion(voutputs, vlabels)
+
+                vloss = reduce_mean(vloss, global_world_size) # 聚合多卡 Loss
+
+                _, vpredicted = torch.max(voutputs.data, 1)
+                vlabels = vlabels.cpu()
+                vpredicted = vpredicted.cpu()
+
+                vlosses.append(vloss.item())
+                vlabels_total += vlabels.tolist()
+                vpredicted_total += vpredicted.tolist()
+
+            v_accuracy = metrics.accuracy_score(vlabels_total, vpredicted_total)
+            v_precision = metrics.precision_score(vlabels_total, vpredicted_total, zero_division=0)
+            v_recall = metrics.recall_score(vlabels_total, vpredicted_total, zero_division=0)
+            v_meanloss = np.mean(vlosses)
+
+            v_f1 = metrics.f1_score(vlabels_total, vpredicted_total, zero_division=0)
+            v_best_score = (v_accuracy + v_precision + v_recall) / 3
+            # ------------------------------------------------------------------
+            # 模型保存 (包含 Key 清洗逻辑)
+            # ------------------------------------------------------------------
+            if v_best_score > curr_best_score - 0.0001 and global_rank == 0:
+                # 获取原始 state_dict (自动处理 DDP module 前缀)
+                raw_state_dict = model.module.state_dict()
+                # [关键] 清洗 torch.compile 产生的 _orig_mod. 前缀
+                clean_dict = clean_state_dict(raw_state_dict)
+
+                save_path = model_dir + args.model_type + f'.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
+                torch.save(clean_dict, save_path)
+                
+                if v_best_score > curr_best_score:
+                    curr_best_score = v_best_score
+                    curr_best_score_loc = epoch + 1
+                
+                if len(v_best_score_epoches) > 0 and v_best_score > v_best_score_epoches[-1]:
+                    better_path = model_dir + args.model_type + f'.betterthanlast.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
+                    torch.save(clean_dict, better_path)
+
+            v_best_score_epoches.append(v_best_score)          
+
+            # 日志输出
+            time_cost = time.time() - start
+            if global_rank == 0:
+                try:
+                    last_lr = scheduler.get_last_lr()[0]
+                    sys.stderr.write(
+                        f"轮次 [{epoch + 1}/{args.max_epoch_num}]；学习率: {last_lr:.4e};"
+                        f"验证损失: {v_meanloss:.4f}, "
+                        f"准确率: {v_accuracy:.4f}, 精确率: {v_precision:.4f}, 召回率: {v_recall:.4f}, "
+                        f"最佳准确率: {curr_best_score:.4f}；时间: {time_cost:.2f}s\n"
+                    )
+                except Exception:
+                    sys.stderr.write(
+                        f"轮次 [{epoch + 1}/{args.max_epoch_num}];"
+                        f"验证损失: {v_meanloss:.4f}, "
+                        f"准确率: {v_accuracy:.4f}, 精确率: {v_precision:.4f}, 召回率: {v_recall:.4f}, "
+                        f"最佳准确率: {curr_best_score:.4f}；时间: {time_cost:.2f}s\n"
+                    )
+                sys.stderr.flush()
+
+        model.train()
+
+        # Early Stopping
+        if v_meanloss < curr_lowest_loss:
+            no_improve_count = 0
+            curr_lowest_loss = v_meanloss
+            sys.stderr.write(f"训练进程-{os.getpid()} 验证损失改进至 {v_meanloss:.4f}\n")
+        else:
+            no_improve_count += 1
+            sys.stderr.write(f"训练进程-{os.getpid()} 验证损失无改进 ({no_improve_count}/{patience})\n")
+
+        if no_improve_count >= patience and epoch >= args.min_epoch_num - 1:
+            if global_rank == 0:
+                sys.stderr.write("Early Stop Triggered.\n")
+            dist.barrier()
+            break
+
+        # Epoch Sync (如果有需要)
+        if args.epoch_sync:
+            sync_ckpt = model_dir + args.model_type + \
+                        f'.epoch_sync_node{args.node_rank}.b{args.seq_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
+            # 同样使用清洗后的 dict
+            if local_rank == 0:
+                clean_dict = clean_state_dict(model.module.state_dict())
+                torch.save(clean_dict, sync_ckpt)
+            dist.barrier() # 等待保存完成
+            # 其他进程加载 (此处略去加载逻辑，通常 checkpoint 函数会处理)
+
+        # Scheduler Update
+        if args.lr_scheduler == "ReduceLROnPlateau":
+            scheduler.step(v_meanloss)
+        else:
+            scheduler.step()
+
+    if global_rank == 0:
+        sys.stderr.write(f"最佳模型位于 Epoch {curr_best_score_loc} (Score: {curr_best_score})\n")
+    
+    clear_linecache()
+    cleanup()
+
+def train_worker_aggregate(local_rank, global_world_size, args):
+    """site-level 聚合模型专用训练（完全参照 train_worker_mtm 风格优化）"""
+    global_rank = args.node_rank * args.ngpus_per_node + local_rank
+
+    dist.init_process_group(
+        backend="nccl",
+        init_method=args.dist_url,
+        world_size=global_world_size,
+        rank=global_rank,
+        timeout=timedelta(minutes=30)
+    )
+
+    sys.stderr.write(f"training_process-{os.getpid()} [init] == local rank: {local_rank}, global rank: {global_rank} ==\n")
+
+    # ==================== 模型目录清理 ====================
+    if global_rank == 0 or args.epoch_sync:
+        model_dir = args.model_dir
+        if model_dir != "/":
+            model_dir = os.path.abspath(model_dir).rstrip("/")
+            if local_rank == 0:
+                if not os.path.exists(model_dir):
+                    os.makedirs(model_dir)
+                else:
+                    model_regex = re.compile(r"aggregate\.(attbigru|transformer)\.b\d+_epoch\d+\.ckpt*")
+                    for mfile in os.listdir(model_dir):
+                        if model_regex.match(mfile):
+                            os.remove(os.path.join(model_dir, mfile))
+            model_dir += "/"
+
+    # ==================== 加载模型（支持 AggrAttRNN 或 AggrTransformer） ====================
+    model = AggrAttRNN(
+        seq_len=11, num_layers=1, num_classes=1, dropout_rate=args.dropout_rate,
+        hidden_size=args.aggregate_hidden, binsize=20,
+        model_type='attbigru', device=local_rank
+    )
+
+    if args.init_model is not None:
+        sys.stderr.write(f"training_process-{os.getpid()} loading pre-trained model: {args.init_model}\n")
+        para_dict = torch.load(args.init_model, map_location='cpu')
+        model_dict = model.state_dict()
+        model_dict.update({k: v for k, v in para_dict.items() if k in model_dict})
+        model.load_state_dict(model_dict)
+
+    # ==================== torch.compile（与 mtm 完全一致） ====================
+    if str2bool(args.use_compile):
+        try:
+            sys.stderr.write(f"training_process-{os.getpid()} 正在编译模型 (torch.compile)...\n")
+            model = torch.compile(model, mode="default")
+        except Exception as e:
+            sys.stderr.write(f"Warning: torch.compile 失败，回退到 eager 模式。错误: {e}\n")
+
+    dist.barrier()
+    model = model.cuda(local_rank)
+    model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+
+    # ==================== 数据加载（与你之前 npz 一致） ====================
+    sys.stderr.write(f"training_process-{os.getpid()} reading aggregate data..\n")
+    train_dataset = AggregateDataset(args.train_file)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, sampler=train_sampler,
+        num_workers=args.dl_num_workers, pin_memory=True
+    )
+
+    valid_dataset = AggregateDataset(args.valid_file)
+    valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset, shuffle=False)
+    valid_loader = torch.utils.data.DataLoader(
+        valid_dataset, batch_size=args.batch_size, sampler=valid_sampler,
+        num_workers=args.dl_num_workers, pin_memory=True
+    )
+
+    # ==================== 优化器 & 调度器（AdamW + Cosine） ====================
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+
+    if args.lr_scheduler == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
+                                      patience=args.lr_patience, verbose=True)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
+
+    # ==================== 训练循环（完全对标 mtm 风格） ====================
+    total_step = len(train_loader)
+    sys.stderr.write(f"training_process-{os.getpid()} total_step: {total_step}\n")
+
+    curr_lowest_loss = float('inf')
+    curr_best_epoch = 0
+    no_improve_count = 0
+    patience = args.patience
+
+    model.train()
+    for epoch in range(args.max_epoch_num):
+        train_sampler.set_epoch(epoch)
+        tlosses = []
+        start = time.time()
+
+        for i, (pos, hist, label) in enumerate(train_loader):
+            pos = pos.cuda(local_rank, non_blocking=True)
+            hist = hist.cuda(local_rank, non_blocking=True)
+            label = label.cuda(local_rank, non_blocking=True)
+
+            optimizer.zero_grad()
+            outputs = model(pos.unsqueeze(-1), hist).squeeze(-1)          # (B,1) -> (B,)
+            loss = criterion(outputs, label)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            tlosses.append(loss.item())
+
+            if global_rank == 0 and ((i + 1) % args.step_interval == 0 or (i + 1) == total_step):
+                time_cost = time.time() - start
+                sys.stderr.write(
+                    f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}], Step [{i+1}/{total_step}]; "
+                    f"TrainLoss: {np.mean(tlosses):.6f}; Time: {time_cost:.2f}s\n"
+                )
+                start = time.time()
+                tlosses = []
+
+        # ==================== Validation ====================
+        model.eval()
+        with torch.no_grad():
+            vlosses = []
+            val_all_preds = []
+            val_all_labels = []
+            for pos, hist, label in valid_loader:
+                pos = pos.cuda(local_rank, non_blocking=True)
+                hist = hist.cuda(local_rank, non_blocking=True)
+                label = label.cuda(local_rank, non_blocking=True)
+
+                outputs = model(pos.unsqueeze(-1), hist).squeeze(-1)
+                vloss = criterion(outputs, label)
+                vloss = reduce_mean(vloss, global_world_size)
+                vlosses.append(vloss.item())
+
+                
+                if global_rank == 0:
+                    preds = torch.sigmoid(outputs)
+                    val_all_preds.append(preds.cpu().numpy())
+                    val_all_labels.append(label.cpu().numpy())
+            
+            # gathered_preds = [torch.zeros_like(val_all_preds) for _ in range(global_world_size)]
+            # gathered_labels = [torch.zeros_like(val_all_labels) for _ in range(global_world_size)]
+            
+            # # 汇总到所有进程（或者仅汇总到 rank 0）
+            # dist.all_gather(gathered_preds, val_all_preds.cuda(local_rank))
+            # dist.all_gather(gathered_labels, val_all_labels.cuda(local_rank))
+            v_meanloss = np.mean(vlosses)
+
+            # ==================== 保存 + Early Stop ====================
+            if global_rank == 0:
+                val_all_preds = np.concatenate(val_all_preds)
+                val_all_labels = np.concatenate(val_all_labels)
+                # full_preds = torch.cat(gathered_preds).cpu().numpy()
+                # full_labels = torch.cat(gathered_labels).cpu().numpy()
+
+                # 计算回归指标
+                pcc, _ = pearsonr(val_all_preds, val_all_labels)
+                scc, _ = spearmanr(val_all_preds, val_all_labels)
+                mae = np.mean(np.abs(val_all_preds - val_all_labels))
+                # 清洗 compile 前缀
+                state = model.module.state_dict()
+                clean_state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
+
+                save_path = model_dir + f"aggregate.{args.aggregate_model_type}.b11_epoch{epoch+1}.ckpt"
+                torch.save(clean_state, save_path)
+
+                if v_meanloss < curr_lowest_loss:
+                    curr_lowest_loss = v_meanloss
+                    curr_best_epoch = epoch + 1
+                    no_improve_count = 0
+                    torch.save(clean_state, model_dir + "aggregate.best.ckpt")
+                else:
+                    no_improve_count += 1
+
+                # sys.stderr.write(
+                #     f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
+                #     f"ValidLoss: {v_meanloss:.6f} | Best: {curr_lowest_loss:.6f} "
+                #     f"(epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
+                # )
+                sys.stderr.write(
+                    f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
+                    f"ValidLoss: {v_meanloss:.6f} | PCC: {pcc:.4f} | SCC: {scc:.4f} | MAE: {mae:.4f}\n"
+                    f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
+                )
+        model.train()
+
+        if no_improve_count >= patience and epoch >= args.min_epoch_num - 1:
+            if global_rank == 0:
+                sys.stderr.write(f"training_process-{os.getpid()} Early stop at epoch {epoch+1}\n")
+            break
+
+        if args.lr_scheduler == "ReduceLROnPlateau":
+            scheduler.step(v_meanloss)
+        else:
+            scheduler.step()
+
+    if global_rank == 0:
+        sys.stderr.write(f"✅ Best aggregate model at epoch {curr_best_epoch} (ValLoss: {curr_lowest_loss:.6f})\n")
+
+    clear_linecache()
+    cleanup()
 
 def train_multigpu(args):
     total_start = time.time()

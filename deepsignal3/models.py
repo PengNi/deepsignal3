@@ -15,6 +15,10 @@ import torch.utils.checkpoint
 from .utils.constants_torch import use_cuda
 import numpy as np
 
+from einops import repeat, reduce, rearrange
+from .utils.sampling import DownsampleLayer
+from .utils.utils_mtm import *
+
 # inner module ================================================
 # https://github.com/kuangliu/pytorch-cifar/blob/master/models/resnet.py
 """ResNet in PyTorch.
@@ -304,1528 +308,218 @@ class ModelBiLSTM(nn.Module):
         out = self.dropout2(out)
         out = self.fc2(out)
 
-        return out, out_seq,out_signal,self.softmax(out)
-
-
-class ModelExtraction(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-        lambd=1.0,
-    ):
-        super(ModelExtraction, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-        self.lambd = lambd
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        if self.module != "signal_bilstm":
-            self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-            self.is_base = is_base
-            self.is_signallen = is_signallen
-            self.is_trace = is_trace
-            self.sigfea_num = 3 if self.is_signallen else 2
-            if self.is_trace:
-                self.sigfea_num += 1
-            if self.is_base:
-                self.lstm_seq = nn.LSTM(
-                    embedding_size + self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            else:
-                self.lstm_seq = nn.LSTM(
-                    self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-            # self.dropout_seq = nn.Dropout(p=dropout_rate)
-            self.relu_seq = nn.ReLU()
-
-        # signal feature
-        if self.module != "seq_bilstm":
-            # self.convs = ResNet3(self.nhid_signal, (1, 1, 1), self.signal_len, self.signal_len)  # (N, C, L)
-            self.lstm_signal = nn.LSTM(
-                self.signal_len,
-                self.nhid_signal,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-            # self.dropout_signal = nn.Dropout(p=dropout_rate)
-            self.relu_signal = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    # def backward(self, grad_output):
-    #    # 在反向传播中，将梯度乘以-lambd
-    #    return -self.lambd * grad_output
-
-    def forward(self, kmer, base_means, base_stds, base_signal_lens, signals):
-        # seq feature ============================================
-        if self.module != "signal_bilstm":
-            base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-            base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-            base_signal_lens = torch.reshape(
-                base_signal_lens, (-1, self.seq_len, 1)
-            ).float()
-            # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-            if self.is_base:
-                kmer_embed = self.embed(kmer.long())
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds), 2
-                    )  # (N, L, C)
-                else:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds), 2
-                    )  # (N, L, C)
-            else:
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-                else:
-                    out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-
-            out_seq, _ = self.lstm_seq(
-                out_seq,
-                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq),
-            )  # (N, L, nhid_seq*2)
-            out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-            # out_seq = self.dropout_seq(out_seq)
-            out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        if self.module != "seq_bilstm":
-            out_signal = signals.float()
-            # resnet ---
-            # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-            # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-            # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-            # lstm ---
-            out_signal, _ = self.lstm_signal(
-                out_signal,
-                self.init_hidden(
-                    out_signal.size(0), self.num_layers2, self.nhid_signal
-                ),
-            )
-            out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-            # out_signal = self.dropout_signal(out_signal)
-            out_signal = self.relu_signal(out_signal)
-
-        # combined ================================================
-        if self.module == "seq_bilstm":
-            out = out_seq
-        elif self.module == "signal_bilstm":
-            out = out_signal
-        elif self.module == "both_bilstm":
-            out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        combine_out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        return combine_out
-
-
-class ModelDomainExtraction(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-        lambd=1.0,
-    ):
-        super(ModelDomainExtraction, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-        self.lambd = lambd
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        if self.module != "signal_bilstm":
-            self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-            self.is_base = is_base
-            self.is_signallen = is_signallen
-            self.is_trace = is_trace
-            self.sigfea_num = 4 if self.is_signallen else 3
-            if self.is_trace:
-                self.sigfea_num += 1
-            if self.is_base:
-                self.lstm_seq = nn.LSTM(
-                    embedding_size + self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            else:
-                self.lstm_seq = nn.LSTM(
-                    self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-            # self.dropout_seq = nn.Dropout(p=dropout_rate)
-            self.relu_seq = nn.ReLU()
-
-        # signal feature
-        if self.module != "seq_bilstm":
-            # self.convs = ResNet3(self.nhid_signal, (1, 1, 1), self.signal_len, self.signal_len)  # (N, C, L)
-            self.lstm_signal = nn.LSTM(
-                self.signal_len,
-                self.nhid_signal,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-            # self.dropout_signal = nn.Dropout(p=dropout_rate)
-            self.relu_signal = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    # def backward(self, grad_output):
-    #    # 在反向传播中，将梯度乘以-lambd
-    #    return -self.lambd * grad_output
-
-    def forward(self, kmer, base_means, base_stds, base_signal_lens, signals, tags):
-        # seq feature ============================================
-        if self.module != "signal_bilstm":
-            base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-            base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-            base_signal_lens = torch.reshape(
-                base_signal_lens, (-1, self.seq_len, 1)
-            ).float()
-            # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-            tags = torch.reshape(tags, (-1, self.seq_len, 1)).float()
-            if self.is_base:
-                kmer_embed = self.embed(kmer.long())
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens, tags), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens, tags), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, tags), 2
-                    )  # (N, L, C)
-                else:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, tags), 2
-                    )  # (N, L, C)
-            else:
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens, tags), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens, tags), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat((base_means, base_stds, tags), 2)  # (N, L, C)
-                else:
-                    out_seq = torch.cat((base_means, base_stds, tags), 2)  # (N, L, C)
-
-            out_seq, _ = self.lstm_seq(
-                out_seq,
-                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq),
-            )  # (N, L, nhid_seq*2)
-            out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-            # out_seq = self.dropout_seq(out_seq)
-            out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        if self.module != "seq_bilstm":
-            out_signal = signals.float()
-            # resnet ---
-            # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-            # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-            # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-            # lstm ---
-            out_signal, _ = self.lstm_signal(
-                out_signal,
-                self.init_hidden(
-                    out_signal.size(0), self.num_layers2, self.nhid_signal
-                ),
-            )
-            out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-            # out_signal = self.dropout_signal(out_signal)
-            out_signal = self.relu_signal(out_signal)
-
-        # combined ================================================
-        if self.module == "seq_bilstm":
-            out = out_seq
-        elif self.module == "signal_bilstm":
-            out = out_signal
-        elif self.module == "both_bilstm":
-            out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        combine_out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        return combine_out
-
-
-class combineLoss(nn.Module):
-    def __init__(self, device=0, β=0.1):
-        super(combineLoss, self).__init__()
-        # weight_rank = torch.from_numpy(np.array([1, 1.0])).float()
-        weight_rank = torch.from_numpy(np.array([1,1, 1.0])).float()
-        self.device = device
-        self.β = β
-        if use_cuda:
-            weight_rank = weight_rank.cuda(self.device)
-            # self.β=β.cuda(self.device)
-            # weight_rank2 = weight_rank2.cuda(self.device)
-        self.loss = nn.CrossEntropyLoss(weight=weight_rank)#nn.BCEWithLogitsLoss(pos_weight=weight_rank)  # nn.BCELoss()
-        self.project = nn.Sigmoid()
-        # self.loss_2 = nn.CrossEntropyLoss(weight=weight_rank2)
-
-    def forward(self, domain_classes, tags):
-        # classes = classes.reshape(classes.shape[0], 2)
-        # labels = labels.reshape(labels.shape[0], 1)
-        # print('classes shape: {}'.format(classes.shape))
-        # print('labels shape: {}'.format(labels.shape))
-        # left = F.relu(0.9 - classes[0], inplace=True) ** 2
-        # print('left shape: {}'.format(left.shape))
-        # right = F.relu(classes[1] - 0.1, inplace=True) ** 2
-        # print('right shape: {}'.format(right.shape))
-
-        # margin_loss = labels * left + 0.5 * (1.0 - labels) * right
-        # margin_loss = margin_loss.sum()
-        onehot_tags = torch.eye(3)[tags.long(), :].cuda(self.device)
-        return self.β * self.loss(domain_classes, onehot_tags)
-
-
-class GradientReverseFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, coeff=1.0):
-        ctx.coeff = coeff
-        return input.view_as(input)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output.neg() * ctx.coeff, None
-
-
-class GradientReverseLayer(nn.Module):
-    def __init__(self, coeff=1.0):
-        super(GradientReverseLayer, self).__init__()
-        self.coeff = coeff
-
-    def forward(self, input):
-        return GradientReverseFunction.apply(input, self.coeff)
-
-
-class Classifier1(nn.Module):
-    def __init__(self, dropout_rate=0.5, hidden_size=256, num_classes=2, device=0):
-        super(Classifier1, self).__init__()
-        self.device = device
-
-        self.dropout = nn.Dropout(p=dropout_rate)
-        self.fc = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size, num_classes)
-
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
-
-    def forward(self, combine_out):
-        # decode
-        out = self.dropout(combine_out)  # .cuda(self.device)
-        out = self.fc(out)
-        out = self.relu(out)
-        out = self.dropout1(out)
-        out = self.fc1(out)
         return out, self.softmax(out)
 
 
-class Classifier2(nn.Module):
-    def __init__(self, dropout_rate=0.5, hidden_size=256, num_classes=3, device=0):
-        super(Classifier2, self).__init__()
-        self.device = device
-        self.grl = GradientReverseLayer()
-        self.dropout = nn.Dropout(p=dropout_rate)
-        self.fc = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size, num_classes)
+class TokenMixingLayer(nn.Module):
 
-        self.relu = nn.ReLU()
+    def __init__(self, d_model=64, r_hid=4, drop=0.2, norm_first=False, temporal_depth=2):
+        super().__init__()
+                
+        self.temporal = nn.ModuleList([
+            TemporalAttn(d_model, drop, norm_first)
+            for _ in range(temporal_depth)
+        ])
+        
+        self.mlp3 = MLP(d_model, r_hid, drop, norm_first)
+        
+
+
+    def forward(self, x, x_mask, cls_tok, pos, pe, idx_c, pe_type='rel'):
+        x = torch.concat([cls_tok, x], dim=1)
+        x_mask = F.pad(x_mask, (0, 0, 1, 0), 'constant', False)
+        p_mask = pos < 0
+        pos = F.pad(pos + 1, (0, 0, 1, 0), 'constant', 0)
+        p_mask = F.pad(p_mask, (0, 0, 1, 0), 'constant', False)
+        
+        
+        imp = None
+        for layer in self.temporal:
+            x, imp = layer(x, x_mask, pos, pe, pe_type)                  
+                
+        x = self.mlp3(x)
+        return x[:, 1:, :, :], x[:, [0], :, :], imp
+
+
+class modelMTM(nn.Module):
+
+    def __init__(self, num_chn, d_static, num_cls, ratios, d_model=96, r_hid=4, drop=0.2, norm_first=True, down_mode='concat', 
+                 vocab_size=16, embedding_size=4, temporal_depth=2, **kwargs):
+        super().__init__()
+        self.d_model = d_model
+        self.d_static = d_static
+        self.ratios = ratios
+        self.register_buffer('rpe', precompute_rpe(d_model))
+        self.register_buffer('ape', precompute_ape(d_model))
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
+        
+        self.chn_emb = nn.Embedding(num_chn, d_model)
+        nn.init.xavier_uniform_(self.chn_emb.weight)
+        self.cls_tok = nn.Parameter(torch.rand(num_chn, d_model))
+
+        # 传入 temporal_depth
+        self.inp_layer = TokenMixingLayer(d_model, r_hid, drop, norm_first, temporal_depth)
+        self.mixers = nn.ModuleList()
+        self.samplers = nn.ModuleList()
+        for r in ratios:
+            self.mixers.append(TokenMixingLayer(d_model, r_hid, drop, norm_first, temporal_depth))
+            self.samplers.append(DownsampleLayer(d_model, r, down_mode))
+
+        self.cls_head = CLSHead(d_model, d_static, num_cls, drop)
+
+  
+    def forward(self, signal, kmer, x_mask, t, x_static):
+        kmer_embed = self.embedding(kmer)
+        x = torch.cat([signal, kmer_embed], dim=-1)
+
+        bsz, nt, nc = x_mask.shape
+        nt = nt + 1
+        dev = x.device
+        idx_t = repeat(t, "b t -> b t c", c=nc)
+        idx_b = repeat(torch.arange(bsz, device=dev), "b -> b t c", t=nt, c=nc)
+        idx_c = repeat(torch.arange(nc, device=dev), "c -> b t c", b=bsz, t=nt)
+        c_feat = self.chn_emb(torch.arange(nc, device=dev))
+
+        x = apply_abs_pe(x.nan_to_num(0)[..., None] * c_feat, idx_t, self.ape)
+        cls_tok = repeat(self.cls_tok, "c d -> b 1 c d", b=bsz)
+
+        x, cls_tok, imp = self.inp_layer(x, x_mask, cls_tok, idx_t, self.rpe, idx_c)
+
+        for sampler, mixer in zip(self.samplers, self.mixers):
+            x, x_mask, idx_t = sampler(x, x_mask, idx_b, idx_t, idx_c, imp)
+            x, cls_tok, imp = mixer(x, x_mask, cls_tok, idx_t, self.rpe, idx_c)
+
+        outputs = [reduce(cls_tok, "b 1 c d -> b d", 'max')]
+        if self.d_static > 0:
+            outputs.append(x_static)
+        outputs = self.cls_head(torch.cat(outputs, -1))
+        return outputs
+
+
+########################################
+class AggrAttRNN(nn.Module):
+    def __init__(self, seq_len=11, num_layers=1, num_classes=1,
+                 dropout_rate=0.5, hidden_size=32, binsize=20,
+                 model_type="attbigru",
+                 device=0):
+        super(AggrAttRNN, self).__init__()
+        self.model_type = model_type
+        self.device = device
+
+        self.seq_len = seq_len
+        self.num_layers = num_layers
+        self.num_classes = num_classes
+        self.hidden_size = hidden_size
+
+        self.feas_ccs = binsize + 1
+        if self.model_type == "attbilstm":
+            self.rnn_cell = "lstm"
+            self.rnn = nn.LSTM(self.feas_ccs, self.hidden_size, self.num_layers,
+                               dropout=0, batch_first=True, bidirectional=True)
+        elif self.model_type == "attbigru":
+            self.rnn_cell = "gru"
+            self.rnn = nn.GRU(self.feas_ccs, self.hidden_size, self.num_layers,
+                              dropout=0, batch_first=True, bidirectional=True)
+        else:
+            raise ValueError("--model_type not set right!")
+
+        self._att3 = Attention(self.hidden_size * 2, self.hidden_size * 2, self.hidden_size)
+
+        self.dropout1 = nn.Dropout(p=dropout_rate)
+        self.fc1 = nn.Linear(self.hidden_size * 2, self.num_classes)  # 2 for bidirection
+
         # self.softmax = nn.Softmax(1)
 
-    def forward(self, combine_out):
-        # decode
-        out = self.grl(combine_out)
-        out = self.dropout(out)  # .cuda(self.device)
-        out = self.fc(out)
-        out = self.relu(out)
+    def get_model_type(self):
+        return self.model_type
+
+    def init_hidden(self, batch_size, num_layers, hidden_size):
+        # Set initial states
+        h0 = torch.randn(num_layers * 2, batch_size, hidden_size, requires_grad=True)
+        if use_cuda and self.device != "cpu":
+            h0 = h0.cuda(self.device)
+        if self.rnn_cell == "lstm":
+            c0 = torch.randn(num_layers * 2, batch_size, hidden_size, requires_grad=True)
+            if use_cuda and self.device != "cpu":
+                c0 = c0.cuda(self.device)
+            return h0, c0
+        return h0
+
+    def forward(self, offsets, histos):
+
+        offsets = torch.reshape(offsets, (-1, self.seq_len, 1)).float()  # (N, L, 1)
+
+        out = torch.cat((histos.float(), offsets), 2)
+
+        out, n_states = self.rnn(out, self.init_hidden(out.size(0),
+                                                       self.num_layers,
+                                                       self.hidden_size))  # (N, L, nhid*2)
+        # attention_net3 ======
+        # h_n: (num_layer * 2, N, nhid), h_0, c_0 -> h_n, c_n not affected by batch_first
+        # h_n (last layer) = out[:, -1, :self.hidden_size] concats out1[:, 0, self.hidden_size:]
+        h_n = n_states[0] if self.rnn_cell == "lstm" else n_states
+        h_n = h_n.reshape(self.num_layers, 2, -1, self.hidden_size)[-1]  # last layer (2, N, nhid)
+        h_n = h_n.transpose(0, 1).reshape(-1, 1, 2 * self.hidden_size)
+        out, att_weights = self._att3(h_n, out)
+
         out = self.dropout1(out)
         out = self.fc1(out)
+        # out = self.softmax(out)
+
         return out
+def mask_3d(inputs, seq_len, mask_value=0.):
+    batches = inputs.size()[0]
+    assert batches == len(seq_len)
+    max_idx = max(seq_len)
+    for n, idx in enumerate(seq_len):
+        if idx < max_idx.item():
+            if len(inputs.size()) == 3:
+                inputs[n, idx.int():, :] = mask_value
+            else:
+                assert len(inputs.size()) == 2, "The size of inputs must be 2 or 3, received {}".format(inputs.size())
+                inputs[n, idx.int():] = mask_value
+    return inputs
 
 
-class ModelCNN(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-    ):
-        super(ModelCNN, self).__init__()
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
+# bahdanau attention
+class Attention(nn.Module):
+    """
+    Inputs:
+        last_hidden: (batch_size, hidden_size)  # query, (2, N, C) -> (N, 1, C*2)
+        encoder_outputs: (batch_size, max_time, hidden_size)  # key, (N, L, C*2)
+    Returns:
+        context_vector: (N, 2*C)
+        attention_weights: (batch_size, max_time)
+    """
+    def __init__(self, query_size, key_size, hidden_size=128):
+        super(Attention, self).__init__()
         self.hidden_size = hidden_size
 
-        self.nhid_seq = self.hidden_size // 2
-        self.nhid_signal = self.hidden_size - self.nhid_seq
+        self.Wa = nn.Linear(query_size, hidden_size, bias=False)
+        self.Ua = nn.Linear(key_size, hidden_size, bias=False)
+        self.va = nn.Linear(hidden_size, 1, bias=False)
+        self.attw_softmax = nn.Softmax(1)
 
-        # seq feature
-        self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-        self.is_base = is_base
-        self.is_signallen = is_signallen
-        self.is_trace = is_trace
-        self.sigfea_num = 3 if self.is_signallen else 2
-        # (batch_size,seq_len,embedding_size+sigfea_num)
-        cnn_seq_out = int((2 * self.nhid_seq * self.hidden_size) / 4)
-        self.cnn_seq = nn.Conv1d(self.seq_len, cnn_seq_out, 4)
-        self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-        # self.dropout_seq = nn.Dropout(p=dropout_rate)
-        self.relu_seq = nn.ReLU()
+    def forward(self, last_hidden, encoder_outputs):
 
-        # signal feature
+        attention_energies = self._score(last_hidden, encoder_outputs).squeeze(2)  # (N, L, 1) -> (N, L)
 
-        # self.convs = ResNet3(self.nhid_signal, (1, 1, 1), self.signal_len, self.signal_len)  # (N, C, L)
-        cnn_signal_out = int((2 * self.nhid_signal * self.hidden_size) / 8)
-        self.cnn_signal = nn.Conv1d(self.seq_len, cnn_signal_out, 9)
-        self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal = nn.ReLU()
+        # if seq_len is not None:
+        #     attention_energies = mask_3d(attention_energies, seq_len, -float('inf'))
 
-        # combined
-        self.cnn_comb = nn.Conv1d(self.hidden_size, self.hidden_size * 2, 1)
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout2 = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
+        attention_weights = self.attw_softmax(attention_energies).unsqueeze(2)  # (N, L) -> (N, L, 1)
 
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
+        values = torch.transpose(encoder_outputs, 1, 2)  # (N, 2*C, L)
+        context_vector = torch.matmul(values, attention_weights).squeeze(2)  # (N, 2*C, 1) -> (N, 2*C)
 
-    def forward(self, kmer, base_means, base_stds, base_signal_lens, signals):
-        # seq feature ============================================
-        base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-        base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-        base_signal_lens = torch.reshape(
-            base_signal_lens, (-1, self.seq_len, 1)
-        ).float()
-        # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-        kmer_embed = self.embed(kmer.long())
-        out_seq = torch.cat(
-            (kmer_embed, base_means, base_stds, base_signal_lens), 2
-        )  # (N, L, C)
+        return context_vector, attention_weights.squeeze(2)
 
-        out_seq = self.cnn_seq(out_seq)  # (N, L, nhid_seq*2)
-        out_seq = torch.reshape(
-            out_seq, (-1, self.nhid_seq * 2, self.hidden_size)
-        ).float()
-        out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-        # out_seq = self.dropout_seq(out_seq)
-        out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        out_signal = signals.float()
-        # resnet ---
-        # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-        # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-        # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-        # lstm ---
-        out_signal = self.cnn_signal(out_signal)
-        out_signal = torch.reshape(
-            out_signal, (-1, self.nhid_signal * 2, self.hidden_size)
-        ).float()
-        out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-        # out_signal = self.dropout_signal(out_signal)
-        out_signal = self.relu_signal(out_signal)
-
-        # combined ================================================
-        out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
-        out = self.cnn_comb(out)  # (N, L, hidden_size*2)
-        out = torch.reshape(out, (-1, self.hidden_size, self.hidden_size * 2)).float()
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        # decode
-        out = self.dropout1(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout2(out)
-        out = self.fc2(out)
-
-        return out, self.softmax(out)
-
-
-class ModelCG(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-    ):
-        super(ModelCG, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        if self.module != "signal_bilstm":
-            self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-            self.is_base = is_base
-            self.is_signallen = is_signallen
-            self.is_trace = is_trace
-            self.sigfea_num = 5 if self.is_signallen else 4
-            if self.is_trace:
-                self.sigfea_num += 1
-            if self.is_base:
-                self.lstm_seq = nn.LSTM(
-                    embedding_size + self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-                # (batch_size,seq_len,hidden_size*2)
-            else:
-                self.lstm_seq = nn.LSTM(
-                    self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-            # self.dropout_seq = nn.Dropout(p=dropout_rate)
-            self.relu_seq = nn.ReLU()
-
-        # signal feature
-        if self.module != "seq_bilstm":
-            # self.convs = ResNet3(self.nhid_signal, (1, 1, 1), self.signal_len, self.signal_len)  # (N, C, L)
-            self.lstm_signal = nn.LSTM(
-                self.signal_len,
-                self.nhid_signal,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-            # self.dropout_signal = nn.Dropout(p=dropout_rate)
-            self.relu_signal = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout2 = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
-
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    def forward(
-        self, kmer, base_means, base_stds, base_signal_lens, signals, tags, cg_contents
-    ):
-        # seq feature ============================================
-        if self.module != "signal_bilstm":
-            base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-            base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-            base_signal_lens = torch.reshape(
-                base_signal_lens, (-1, self.seq_len, 1)
-            ).float()
-            tags = torch.reshape(tags, (-1, self.seq_len, 1)).float()
-            cg_contents = torch.reshape(cg_contents, (-1, self.seq_len, 1)).float()
-            # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-            if self.is_base:
-                kmer_embed = self.embed(kmer.long())
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (
-                            kmer_embed,
-                            base_means,
-                            base_stds,
-                            base_signal_lens,
-                            tags,
-                            cg_contents,
-                        ),
-                        2,
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (
-                            kmer_embed,
-                            base_means,
-                            base_stds,
-                            base_signal_lens,
-                            tags,
-                            cg_contents,
-                        ),
-                        2,
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, tags, cg_contents), 2
-                    )  # (N, L, C)
-                else:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, tags, cg_contents), 2
-                    )  # (N, L, C)
-            else:
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens, tags, cg_contents), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens, tags, cg_contents), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, tags, cg_contents), 2
-                    )  # (N, L, C)
-                else:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, tags, cg_contents), 2
-                    )  # (N, L, C)
-
-            out_seq, _ = self.lstm_seq(
-                out_seq,
-                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq),
-            )  # (N, L, nhid_seq*2)
-            out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-            # out_seq = self.dropout_seq(out_seq)
-            out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        if self.module != "seq_bilstm":
-            out_signal = signals.float()
-            # resnet ---
-            # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-            # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-            # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-            # lstm ---
-            out_signal, _ = self.lstm_signal(
-                out_signal,
-                self.init_hidden(
-                    out_signal.size(0), self.num_layers2, self.nhid_signal
-                ),
-            )
-            out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-            # out_signal = self.dropout_signal(out_signal)
-            out_signal = self.relu_signal(out_signal)
-
-        # combined ================================================
-        if self.module == "seq_bilstm":
-            out = out_seq
-        elif self.module == "signal_bilstm":
-            out = out_signal
-        elif self.module == "both_bilstm":
-            out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        # decode
-        out = self.dropout1(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout2(out)
-        out = self.fc2(out)
-
-        return out, self.softmax(out)
-
-
-class ModelCombine(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-    ):
-        super(ModelCombine, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        if self.module != "signal_bilstm":
-            self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-            self.is_base = is_base
-            self.is_signallen = is_signallen
-            self.is_trace = is_trace
-            self.sigfea_num = 3 if self.is_signallen else 2
-            if self.is_trace:
-                self.sigfea_num += 1
-            if self.is_base:
-                self.lstm_seq = nn.LSTM(
-                    embedding_size + self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-                # (batch_size,seq_len,hidden_size*2)
-            else:
-                self.lstm_seq = nn.LSTM(
-                    self.sigfea_num,
-                    self.nhid_seq,
-                    self.num_layers2,
-                    dropout=dropout_rate,
-                    batch_first=True,
-                    bidirectional=True,
-                )
-            self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-            # self.dropout_seq = nn.Dropout(p=dropout_rate)
-            self.relu_seq = nn.ReLU()
-
-        # signal feature
-        if self.module != "seq_bilstm":
-            # self.convs = ResNet3(self.nhid_signal, (1, 1, 1), self.signal_len, self.signal_len)  # (N, C, L)
-            self.lstm_signal = nn.LSTM(
-                self.signal_len,
-                self.nhid_signal,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-            # self.dropout_signal = nn.Dropout(p=dropout_rate)
-            self.relu_signal = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size * 2 + 2, hidden_size)  # 2 for bidirection
-        self.dropout2 = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
-
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    def forward(
-        self, kmer, base_means, base_stds, base_signal_lens, signals, tags, cg_contents
-    ):
-        # seq feature ============================================
-        if self.module != "signal_bilstm":
-            base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-            base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-            base_signal_lens = torch.reshape(
-                base_signal_lens, (-1, self.seq_len, 1)
-            ).float()
-            tags = tags.float()
-            cg_contents = cg_contents.float()
-
-            # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-            if self.is_base:
-                kmer_embed = self.embed(kmer.long())
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds), 2
-                    )  # (N, L, C)
-                else:
-                    out_seq = torch.cat(
-                        (kmer_embed, base_means, base_stds), 2
-                    )  # (N, L, C)
-            else:
-                if self.is_signallen and self.is_trace:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_signallen:
-                    out_seq = torch.cat(
-                        (base_means, base_stds, base_signal_lens), 2
-                    )  # (N, L, C)
-                elif self.is_trace:
-                    out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-                else:
-                    out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-
-            out_seq, _ = self.lstm_seq(
-                out_seq,
-                self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq),
-            )  # (N, L, nhid_seq*2)
-            out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-            # out_seq = self.dropout_seq(out_seq)
-            out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        if self.module != "seq_bilstm":
-            out_signal = signals.float()
-            # resnet ---
-            # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-            # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-            # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-            # lstm ---
-            out_signal, _ = self.lstm_signal(
-                out_signal,
-                self.init_hidden(
-                    out_signal.size(0), self.num_layers2, self.nhid_signal
-                ),
-            )
-            out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-            # out_signal = self.dropout_signal(out_signal)
-            out_signal = self.relu_signal(out_signal)
-
-        # combined ================================================
-        if self.module == "seq_bilstm":
-            out = out_seq
-        elif self.module == "signal_bilstm":
-            out = out_signal
-        elif self.module == "both_bilstm":
-            out = torch.cat((out_seq, out_signal), 2)  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        out = torch.cat((out_fwd_last, out_bwd_last), 1)
-        extrac_fea = torch.cat((tags, cg_contents), 1)
-        out = torch.cat((out, extrac_fea), 1)
-
-        # decode
-        out = self.dropout1(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout2(out)
-        out = self.fc2(out)
-
-        return out, self.softmax(out)
-
-
-class ModelFrequency(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-    ):
-        super(ModelFrequency, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-        self.is_base = is_base
-        self.is_signallen = is_signallen
-        self.is_trace = is_trace
-        self.sigfea_num = 3 if self.is_signallen else 2
-        if self.is_trace:
-            self.sigfea_num += 1
-        if self.is_base:
-            self.lstm_seq = nn.LSTM(
-                embedding_size + self.sigfea_num,
-                self.nhid_seq,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            # (batch_size,seq_len,hidden_size*2)
-        else:
-            self.lstm_seq = nn.LSTM(
-                self.sigfea_num,
-                self.nhid_seq,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-        self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-        # self.dropout_seq = nn.Dropout(p=dropout_rate)
-        self.relu_seq = nn.ReLU()
-
-        # signal feature
-        self.lstm_signal = nn.LSTM(
-            self.signal_len,
-            self.nhid_signal,
-            self.num_layers2,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal = nn.ReLU()
-
-        # signal frequency feature
-        self.lstm_signal_freq = nn.LSTM(
-            self.signal_len,
-            self.nhid_signal,
-            self.num_layers2,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.fc_signal_freq = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal_freq = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size + self.nhid_signal,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout2 = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
-
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    def forward(
-        self, kmer, base_means, base_stds, base_signal_lens, signals, signals_freq
-    ):
-        # seq feature ============================================
-        base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-        base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-        base_signal_lens = torch.reshape(
-            base_signal_lens, (-1, self.seq_len, 1)
-        ).float()
-        # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-        if self.is_base:
-            kmer_embed = self.embed(kmer.long())
-            if self.is_signallen and self.is_trace:
-                out_seq = torch.cat(
-                    (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_signallen:
-                out_seq = torch.cat(
-                    (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_trace:
-                out_seq = torch.cat((kmer_embed, base_means, base_stds), 2)  # (N, L, C)
-            else:
-                out_seq = torch.cat((kmer_embed, base_means, base_stds), 2)  # (N, L, C)
-        else:
-            if self.is_signallen and self.is_trace:
-                out_seq = torch.cat(
-                    (base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_signallen:
-                out_seq = torch.cat(
-                    (base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_trace:
-                out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-            else:
-                out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-
-        out_seq, _ = self.lstm_seq(
-            out_seq, self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq)
-        )  # (N, L, nhid_seq*2)
-        out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-        # out_seq = self.dropout_seq(out_seq)
-        out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        out_signal = signals.float()
-        # resnet ---
-        # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-        # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-        # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-        # lstm ---
-        out_signal, _ = self.lstm_signal(
-            out_signal,
-            self.init_hidden(out_signal.size(0), self.num_layers2, self.nhid_signal),
-        )
-        out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-        # out_signal = self.dropout_signal(out_signal)
-        out_signal = self.relu_signal(out_signal)
-
-        # signal feature ==========================================
-        out_signal_freq = signals_freq.float()
-        out_signal_freq, _ = self.lstm_signal_freq(
-            out_signal_freq,
-            self.init_hidden(
-                out_signal_freq.size(0), self.num_layers2, self.nhid_signal
-            ),
-        )
-        out_signal_freq = self.fc_signal_freq(out_signal_freq)
-        out_signal_freq = self.relu_signal(out_signal_freq)
-
-        # combined ================================================
-        out = torch.cat(
-            (out_seq, out_signal, out_signal_freq), 2
-        )  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        # decode
-        out = self.dropout1(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout2(out)
-        out = self.fc2(out)
-
-        return out, self.softmax(out)
-
-
-class ModelFrequency_mp(nn.Module):
-    def __init__(
-        self,
-        seq_len=13,
-        signal_len=16,
-        num_layers1=3,
-        num_layers2=1,
-        num_classes=2,
-        dropout_rate=0.5,
-        hidden_size=256,
-        vocab_size=16,
-        embedding_size=4,
-        is_base=True,
-        is_signallen=True,
-        is_trace=False,
-        module="both_bilstm",
-        device=0,
-    ):
-        super(ModelFrequency_mp, self).__init__()
-        self.model_type = "BiLSTM"
-        self.module = module
-        self.device = device
-
-        self.seq_len = seq_len
-        self.signal_len = signal_len
-        self.num_layers1 = num_layers1  # for combined (seq+signal) feature
-        self.num_layers2 = num_layers2  # for seq and signal feature separately
-        self.num_classes = num_classes
-
-        self.hidden_size = hidden_size
-
-        if self.module == "both_bilstm":
-            self.nhid_seq = self.hidden_size // 2
-            self.nhid_signal = self.hidden_size - self.nhid_seq
-        elif self.module == "seq_bilstm":
-            self.nhid_seq = self.hidden_size
-        elif self.module == "signal_bilstm":
-            self.nhid_signal = self.hidden_size
-        else:
-            raise ValueError("--model_type is not right!")
-
-        # seq feature
-        self.embed = nn.Embedding(vocab_size, embedding_size)  # for dna/rna base
-        self.is_base = is_base
-        self.is_signallen = is_signallen
-        self.is_trace = is_trace
-        self.sigfea_num = 3 if self.is_signallen else 2
-        if self.is_trace:
-            self.sigfea_num += 1
-        if self.is_base:
-            self.lstm_seq = nn.LSTM(
-                embedding_size + self.sigfea_num,
-                self.nhid_seq,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-            # (batch_size,seq_len,hidden_size*2)
-        else:
-            self.lstm_seq = nn.LSTM(
-                self.sigfea_num,
-                self.nhid_seq,
-                self.num_layers2,
-                dropout=dropout_rate,
-                batch_first=True,
-                bidirectional=True,
-            )
-        self.fc_seq = nn.Linear(self.nhid_seq * 2, self.nhid_seq)
-        # self.dropout_seq = nn.Dropout(p=dropout_rate)
-        self.relu_seq = nn.ReLU()
-
-        # signal feature
-        self.lstm_signal = nn.LSTM(
-            self.signal_len,
-            self.nhid_signal,
-            self.num_layers2,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.fc_signal = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal = nn.ReLU()
-
-        # signal frequency Phase feature
-        self.lstm_signal_freq_p = nn.LSTM(
-            self.signal_len,
-            self.nhid_signal,
-            self.num_layers2,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.fc_signal_freq_p = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal_freq_p = nn.ReLU()
-
-        # signal frequency Magnitude feature
-        self.lstm_signal_freq_m = nn.LSTM(
-            self.signal_len,
-            self.nhid_signal,
-            self.num_layers2,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.fc_signal_freq_m = nn.Linear(self.nhid_signal * 2, self.nhid_signal)
-        # self.dropout_signal = nn.Dropout(p=dropout_rate)
-        self.relu_signal_freq_m = nn.ReLU()
-
-        # combined
-        self.lstm_comb = nn.LSTM(
-            self.hidden_size * 2,
-            self.hidden_size,
-            self.num_layers1,
-            dropout=dropout_rate,
-            batch_first=True,
-            bidirectional=True,
-        )
-        self.dropout1 = nn.Dropout(p=dropout_rate)
-        self.fc1 = nn.Linear(hidden_size * 2, hidden_size)  # 2 for bidirection
-        self.dropout2 = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
-
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(1)
-
-    def get_model_type(self):
-        return self.model_type
-
-    def init_hidden(self, batch_size, num_layers, hidden_size):
-        # Set initial states
-        h0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        c0 = autograd.Variable(torch.randn(num_layers * 2, batch_size, hidden_size))
-        if use_cuda:
-            h0 = h0.cuda(self.device)
-            c0 = c0.cuda(self.device)
-        return h0, c0
-
-    def forward(
-        self, kmer, base_means, base_stds, base_signal_lens, signals, magnitude, phase
-    ):
-        # seq feature ============================================
-        base_means = torch.reshape(base_means, (-1, self.seq_len, 1)).float()
-        base_stds = torch.reshape(base_stds, (-1, self.seq_len, 1)).float()
-        base_signal_lens = torch.reshape(
-            base_signal_lens, (-1, self.seq_len, 1)
-        ).float()
-        # base_probs = torch.reshape(base_probs, (-1, self.seq_len, 1)).float()
-        if self.is_base:
-            kmer_embed = self.embed(kmer.long())
-            if self.is_signallen and self.is_trace:
-                out_seq = torch.cat(
-                    (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_signallen:
-                out_seq = torch.cat(
-                    (kmer_embed, base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_trace:
-                out_seq = torch.cat((kmer_embed, base_means, base_stds), 2)  # (N, L, C)
-            else:
-                out_seq = torch.cat((kmer_embed, base_means, base_stds), 2)  # (N, L, C)
-        else:
-            if self.is_signallen and self.is_trace:
-                out_seq = torch.cat(
-                    (base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_signallen:
-                out_seq = torch.cat(
-                    (base_means, base_stds, base_signal_lens), 2
-                )  # (N, L, C)
-            elif self.is_trace:
-                out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-            else:
-                out_seq = torch.cat((base_means, base_stds), 2)  # (N, L, C)
-
-        out_seq, _ = self.lstm_seq(
-            out_seq, self.init_hidden(out_seq.size(0), self.num_layers2, self.nhid_seq)
-        )  # (N, L, nhid_seq*2)
-        out_seq = self.fc_seq(out_seq)  # (N, L, nhid_seq)
-        # out_seq = self.dropout_seq(out_seq)
-        out_seq = self.relu_seq(out_seq)
-
-        # signal feature ==========================================
-        out_signal = signals.float()
-        # resnet ---
-        # out_signal = out_signal.transpose(1, 2)  # (N, C, L)
-        # out_signal = self.convs(out_signal)  # (N, nhid_signal, L)
-        # out_signal = out_signal.transpose(1, 2)  # (N, L, nhid_signal)
-        # lstm ---
-        out_signal, _ = self.lstm_signal(
-            out_signal,
-            self.init_hidden(out_signal.size(0), self.num_layers2, self.nhid_signal),
-        )
-        out_signal = self.fc_signal(out_signal)  # (N, L, nhid_signal)
-        # out_signal = self.dropout_signal(out_signal)
-        out_signal = self.relu_signal(out_signal)
-
-        # signal magnitude feature ==========================================
-        out_signal_freq_m = magnitude.float()
-        out_signal_freq_m, _ = self.lstm_signal_freq_m(
-            out_signal_freq_m,
-            self.init_hidden(
-                out_signal_freq_m.size(0), self.num_layers2, self.nhid_signal
-            ),
-        )
-        out_signal_freq_m = self.fc_signal_freq_m(out_signal_freq_m)
-        out_signal_freq_m = self.relu_signal_freq_m(out_signal_freq_m)
-
-        # signal magnitude feature ==========================================
-        out_signal_freq_p = phase.float()
-        out_signal_freq_p, _ = self.lstm_signal_freq_p(
-            out_signal_freq_p,
-            self.init_hidden(
-                out_signal_freq_p.size(0), self.num_layers2, self.nhid_signal
-            ),
-        )
-        out_signal_freq_p = self.fc_signal_freq_p(out_signal_freq_p)
-        out_signal_freq_p = self.relu_signal_freq_p(out_signal_freq_p)
-
-        # combined ================================================
-        out = torch.cat(
-            (out_seq, out_signal, out_signal_freq_m, out_signal_freq_p), 2
-        )  # (N, L, hidden_size)
-        out, _ = self.lstm_comb(
-            out, self.init_hidden(out.size(0), self.num_layers1, self.hidden_size)
-        )  # (N, L, hidden_size*2)
-        out_fwd_last = out[:, -1, : self.hidden_size]
-        out_bwd_last = out[:, 0, self.hidden_size :]
-        out = torch.cat((out_fwd_last, out_bwd_last), 1)
-
-        # decode
-        out = self.dropout1(out)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout2(out)
-        out = self.fc2(out)
-
-        return out, self.softmax(out)
+    def _score(self, last_hidden, encoder_outputs):
+        """
+        Computes an attention score
+        :param last_hidden: (batch_size, hidden_dim)  # (2, N, C) -> (N, 1, C*2)
+        :param encoder_outputs: (batch_size, max_time, hidden_dim)  # (N, L, C*2)
+        :return: a score (batch_size, max_time)
+        """
+        out = torch.tanh(self.Wa(last_hidden) + self.Ua(encoder_outputs))  # (N, L, nhid)
+        return self.va(out)  # (N, L, 1)

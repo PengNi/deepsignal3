@@ -4,26 +4,27 @@ from __future__ import absolute_import
 import sys
 import argparse
 
-from .utils.process_utils import display_args,detect_file_type,validate_path
+from .utils.process_utils import display_args, detect_file_type
 
 from ._version import DEEPSIGNAL3_VERSION
 
 
 def main_extraction(args):
-    from .extract_features import extract_features
-    from .extract_features_pod5 import extract_features as extract_features_pod5
-    
     display_args(args)
-    input_path = validate_path(args.input_path, "--input_path")
-    file_type = detect_file_type(input_path)
-    if file_type in ['pod5', 'slow5']:
+    file_type = detect_file_type(args.input_dir)
+    if file_type is None:
+        raise ValueError("No signal files (pod5/slow5/blow5/fast5) found in --input_dir")
+    args.file_type = file_type
+    if file_type in ("pod5", "slow5", "blow5", "fast5"):
+        from .extract_features_pod5 import extract_features as extract_features_pod5
         extract_features_pod5(args)
     else:
+        from .extract_features import extract_features
         extract_features(args)
 
 
 def main_call_mods(args):
-    from .call_modifications import call_mods
+    from .call_modifications import call_mods,inference_ultra
 
     # from .call_modifications_transfer import call_mods as call_mods_transfer
     # from .call_modifications_domain import call_mods as call_mods_domain
@@ -32,18 +33,18 @@ def main_call_mods(args):
     # from .call_modifications_freq import call_mods as call_mods_freq
 
     display_args(args)
-    if args.transfer:
-        print("transfer")
-        # call_mods_transfer(args)
-    elif args.domain:
-        print("domain")
-        # call_mods_domain(args)
-    elif args.freq:
-        print("freq")
-        # call_mods_freq(args)
-    else:
-        call_mods(args)
-
+    # if args.transfer:
+    #     print("transfer")
+    #     # call_mods_transfer(args)
+    # elif args.domain:
+    #     print("domain")
+    #     # call_mods_domain(args)
+    # elif args.freq:
+    #     print("freq")
+    #     # call_mods_freq(args)
+    # else:
+    #     call_mods(args)
+    inference_ultra(args)
 
 def main_call_freq(args):
     from .call_mods_freq import call_mods_frequency_to_file
@@ -55,28 +56,29 @@ def main_call_freq(args):
 def main_train(args):
     from .train import (
         train,
-        train_transfer,
-        train_domain,
-        train_fusion,
-        train_cnn,
-        train_cg,
-        train_combine,
-        trainFreq,
-        trainFreq_mp,
+        # train_transfer,
+        # train_domain,
+        # train_fusion,
+        # train_cnn,
+        # train_cg,
+        # train_combine,
+        # trainFreq,
+        # trainFreq_mp,
     )
 
     display_args(args)
-    if args.transfer:
-        print("transfer")
-        train_transfer(args)
-    elif args.domain:
-        print("domain")
-        train_domain(args)
-    elif args.freq:
-        print("freq")
-        trainFreq_mp(args)
-    else:
-        train(args)
+    # if args.transfer:
+    #     print("transfer")
+    #     train_transfer(args)
+    # elif args.domain:
+    #     print("domain")
+    #     train_domain(args)
+    # elif args.freq:
+    #     print("freq")
+    #     trainFreq_mp(args)
+    # else:
+    #     train(args)
+    train(args)
 
 
 def main_denoise(args):
@@ -569,7 +571,7 @@ def main():
         action="store",
         type=str,
         required=True,
-        help="the directory of fast5/pod5 files",
+        help="the directory of signal files (pod5/slow5/blow5/fast5)",
     )
     se_input.add_argument(
         "--recursively",
