@@ -536,9 +536,10 @@ def train_worker_mtm(local_rank, global_world_size, args):
         for i, sfeatures in enumerate(train_loader):
             _, kmer, base_means, base_stds, base_signal_lens, signals, labels, tags = sfeatures
             
-            # 数据截取
-            train_kmer = kmer[:, args.bias:args.seq_len+args.bias]
-            train_signals = signals[:, args.bias:args.seq_len+args.bias, :]
+            # 数据截取：以数据中心为基准，左右等长截取 seq_len
+            _start = kmer.shape[1] // 2 - args.seq_len // 2
+            train_kmer = kmer[:, _start:_start + args.seq_len]
+            train_signals = signals[:, _start:_start + args.seq_len, :]
 
             # 数据上 GPU
             train_kmer = train_kmer.cuda(local_rank, non_blocking=True).long()
@@ -606,8 +607,9 @@ def train_worker_mtm(local_rank, global_world_size, args):
             for vi, vsfeatures in enumerate(valid_loader):
                 _, vkmer, vbase_means, vbase_stds, vbase_signal_lens, vsignals, vlabels, vtags = vsfeatures
                 
-                vtrain_kmer = vkmer[:, args.bias:args.seq_len+args.bias]
-                vtrain_signals = vsignals[:, args.bias:args.seq_len+args.bias, :]
+                _vstart = vkmer.shape[1] // 2 - args.seq_len // 2
+                vtrain_kmer = vkmer[:, _vstart:_vstart + args.seq_len]
+                vtrain_signals = vsignals[:, _vstart:_vstart + args.seq_len, :]
 
                 vtrain_kmer = vtrain_kmer.cuda(local_rank, non_blocking=True).long()
                 vtrain_signals = vtrain_signals.cuda(local_rank, non_blocking=True).float()

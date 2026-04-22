@@ -802,13 +802,16 @@ def _rand_select_by_kmer_ratio(kmer2lines, kmer2ratios, totalline):
         minlinenum = int(math.ceil(float(unfilled_cnt) / len(unratioed_kmers)))
         cnts = 0
         for kmer in unratioed_kmers:
+            if cnts >= unfilled_cnt:
+                break
             lines = kmer2lines[kmer]
-            if len(lines) <= minlinenum:
+            take = min(minlinenum, unfilled_cnt - cnts)
+            if len(lines) <= take:
                 selected_lines += lines
                 cnts += len(lines)
             else:
-                selected_lines += random.sample(lines, minlinenum)
-                cnts += minlinenum
+                selected_lines += random.sample(lines, take)
+                cnts += take
         print(
             "extract {} samples from {} line_diff kmers".format(
                 cnts, len(unratioed_kmers)
