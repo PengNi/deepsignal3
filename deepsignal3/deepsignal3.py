@@ -197,13 +197,12 @@ def main():
 
     # model input
     sc_call.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="both_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="mtm",
+        choices=["mtm", "bilstm"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm",
+        help="model architecture: 'mtm' (modelMTM) or 'bilstm' (ModelBiLSTM), default: mtm",
     )
     sc_call.add_argument(
         "--seq_len",
@@ -287,6 +286,24 @@ def main():
         required=False,
         help="BiLSTM hidden_size for combined feature",
     )
+
+    # MTM model params
+    sc_mtm = sub_call_mods.add_argument_group("MTM_HYPER")
+    sc_mtm.add_argument("--mtm_num_base_features", type=int, default=1, required=False)
+    sc_mtm.add_argument("--mtm_d_static", type=int, default=0, required=False)
+    sc_mtm.add_argument("--mtm_ratios", nargs="+", type=int, default=[2, 2, 2], required=False)
+    sc_mtm.add_argument("--mtm_r_hid", type=int, default=4, required=False)
+    sc_mtm.add_argument("--mtm_norm_first", type=str, default="True", required=False)
+    sc_mtm.add_argument("--mtm_down_mode", type=str, default="concat",
+                        choices=["concat", "avg", "max"], required=False)
+    sc_mtm.add_argument("--mtm_temporal_depth", type=int, default=2, required=False)
+
+    # Inference options
+    sc_infer = sub_call_mods.add_argument_group("INFERENCE")
+    sc_infer.add_argument("--use_compile", type=str, default="no", required=False,
+                          help="[EXPERIMENTAL] use torch.compile, yes or no, default no")
+    sc_infer.add_argument("--use_cpu", action="store_true", default=False,
+                          help="force CPU inference even when GPUs are available")
 
     sc_output = sub_call_mods.add_argument_group("OUTPUT")
     sc_output.add_argument(

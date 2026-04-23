@@ -89,7 +89,7 @@ def load_model_bilstm(args, device):
         is_base=str2bool(args.is_base),
         is_signallen=str2bool(args.is_signallen),
         is_trace=str2bool(args.is_trace),
-        module=args.model_type,
+        module="both_bilstm",
     )
 
     checkpoint = torch.load(args.model_path, map_location="cpu")
@@ -532,9 +532,6 @@ def main():
 
     # ── BiLSTM-specific ────────────────────────────
     p_lstm = parser.add_argument_group("BILSTM_HYPER")
-    p_lstm.add_argument("--model_type",   type=str, default="both_bilstm",
-                        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
-                        help="BiLSTM variant (ignored for MTM)")
     p_lstm.add_argument("--layernum1",    type=int, default=3)
     p_lstm.add_argument("--layernum2",    type=int, default=1)
     p_lstm.add_argument("--is_base",      type=str, default="yes")
