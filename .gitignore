@@ -6,6 +6,6 @@ deepsignal3/__pycache__
 deepsignal3/utils/__pycache__
 .vscode/
 scripts/__pycache__
-./result/
-./article/
-./claude/
+.result/
+.article/
+.claude/
