@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .process_utils import get_logger
+
+LOGGER = get_logger(__name__)
+
 
 def get_parent_id(bam_read):
     try:
@@ -73,7 +77,7 @@ class ReadIndexedBam:
 
     def get_alignments(self, read_id):  # 多重序列比对，一条read可能map到多个位置
         if self._bam_idx is None:
-            None
+            raise RuntimeError("BAM index not initialized")
         if self.bam_fh is None:
             self.open()
         # try:
@@ -86,7 +90,8 @@ class ReadIndexedBam:
             try:
                 bam_read = next(self.bam_fh)
             except OSError as e:
-                None
+                LOGGER.warning("Failed to read BAM record at offset %d: %s", read_ptr, e)
+                continue
             yield bam_read
 
     def get_first_alignment(self, read_id):
@@ -107,6 +112,8 @@ class ReadIndexedBam:
         return list(self._bam_idx.keys())
 
     def __iter__(self):
+        if self.bam_fh is None:
+            self.open()
         self.bam_fh.reset()
         self._iter = iter(self.bam_fh)
         return self._iter

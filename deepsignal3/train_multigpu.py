@@ -329,7 +329,7 @@ def train_worker(local_rank, global_world_size, args):
             time_cost = time.time() - start
             if global_rank == 0:
                 try:
-                    last_lr = scheduler.get_last_lr()
+                    last_lr = scheduler.get_last_lr()[0]
                     sys.stderr.write('Epoch [{}/{}]; LR: {:.4e}; '
                                      'ValidLoss: {:.4f}, '
                                      'Acc: {:.4f}, Prec: {:.4f}, Reca: {:.4f}, '
@@ -489,6 +489,8 @@ def train_worker_mtm(local_rank, global_world_size, args):
         optimizer = torch.optim.SGD(all_params, lr=args.lr, momentum=0.8, weight_decay=weight_decay)
     elif args.optim_type == "AdamW":
         optimizer = torch.optim.AdamW(all_params, lr=args.lr, weight_decay=weight_decay)
+    else:
+        raise ValueError(f"Unknown optim_type: {args.optim_type}")
 
     # [优化] 使用 CosineAnnealingLR (带 Warmup 效果更好，这里先用 Cosine)
     if args.lr_scheduler == "StepLR":
@@ -498,6 +500,8 @@ def train_worker_mtm(local_rank, global_world_size, args):
                                       patience=args.lr_patience, verbose=True)
     elif args.lr_scheduler == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
+    else:
+        raise ValueError(f"Unknown lr_scheduler: {args.lr_scheduler}")
 
     # [优化] 初始化 AMP Scaler
     # scaler = GradScaler() # [注释] 不使用 Scaler
@@ -524,18 +528,20 @@ def train_worker_mtm(local_rank, global_world_size, args):
         return new_state_dict
 
     model.train()
-    patience = args.patience 
+    patience = args.patience
     no_improve_count = 0
+    seq_len = args.seq_len
+    signal_len = args.signal_len
 
     for epoch in range(args.max_epoch_num):
         train_loader.sampler.set_epoch(epoch)
-        
+
         tlosses = []
         start = time.time()
-        
+
         for i, sfeatures in enumerate(train_loader):
             _, kmer, base_means, base_stds, base_signal_lens, signals, labels, tags = sfeatures
-            
+
             # 数据截取：以数据中心为基准，左右等长截取 seq_len
             _start = kmer.shape[1] // 2 - args.seq_len // 2
             train_kmer = kmer[:, _start:_start + args.seq_len]
@@ -549,8 +555,6 @@ def train_worker_mtm(local_rank, global_world_size, args):
 
             # 数据 Reshape 与 Mask 构造
             batch_size = train_signals.shape[0]
-            seq_len = args.seq_len
-            signal_len = args.signal_len
             
             # (B, 21, S) -> (B, 21*S, 1)
             signals_view = train_signals.view(batch_size, -1, 1)
@@ -882,12 +886,19 @@ def train_worker_aggregate(local_rank, global_world_size, args):
             # dist.all_gather(gathered_labels, val_all_labels.cuda(local_rank))
             v_meanloss = np.mean(vlosses)
 
-            # ==================== 保存 + Early Stop ====================
+            # ==================== Early Stop 计数（所有 rank 同步，避免死锁） ====================
+            # v_meanloss 已经过 reduce_mean 聚合，所有 rank 值相同
+            # curr_lowest_loss 也在所有 rank 上同步更新，保证比较结果一致
+            if v_meanloss < curr_lowest_loss:
+                curr_lowest_loss = v_meanloss
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
+
+            # ==================== 保存（仅 rank 0 执行） ====================
             if global_rank == 0:
                 val_all_preds = np.concatenate(val_all_preds)
                 val_all_labels = np.concatenate(val_all_labels)
-                # full_preds = torch.cat(gathered_preds).cpu().numpy()
-                # full_labels = torch.cat(gathered_labels).cpu().numpy()
 
                 # 计算回归指标
                 pcc, _ = pearsonr(val_all_preds, val_all_labels)
@@ -900,29 +911,22 @@ def train_worker_aggregate(local_rank, global_world_size, args):
                 save_path = model_dir + f"aggregate.{args.aggregate_model_type}.b11_epoch{epoch+1}.ckpt"
                 torch.save(clean_state, save_path)
 
-                if v_meanloss < curr_lowest_loss:
-                    curr_lowest_loss = v_meanloss
+                if no_improve_count == 0:  # 本 epoch 是新最优
                     curr_best_epoch = epoch + 1
-                    no_improve_count = 0
                     torch.save(clean_state, model_dir + "aggregate.best.ckpt")
-                else:
-                    no_improve_count += 1
 
-                # sys.stderr.write(
-                #     f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
-                #     f"ValidLoss: {v_meanloss:.6f} | Best: {curr_lowest_loss:.6f} "
-                #     f"(epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
-                # )
                 sys.stderr.write(
                     f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
                     f"ValidLoss: {v_meanloss:.6f} | PCC: {pcc:.4f} | SCC: {scc:.4f} | MAE: {mae:.4f}\n"
                     f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
                 )
+
         model.train()
 
         if no_improve_count >= patience and epoch >= args.min_epoch_num - 1:
             if global_rank == 0:
                 sys.stderr.write(f"training_process-{os.getpid()} Early stop at epoch {epoch+1}\n")
+            dist.barrier()
             break
 
         if args.lr_scheduler == "ReduceLROnPlateau":

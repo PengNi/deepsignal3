@@ -284,7 +284,6 @@ def process_sig_seq(
 
             elif file_type == "fast5":
                 from .utils import fast5_reader
-                is_single = is_single
                 if is_single:
                     f5 = fast5_reader.SingleFast5(file_path, is_single=True)
                     try:
@@ -301,6 +300,7 @@ def process_sig_seq(
                             _handle_read(sig, f5.get_readid())
                     finally:
                         mf.close()
+
 
         except Exception as e:
             LOGGER.error("Error processing %s: %s", file_path, e)

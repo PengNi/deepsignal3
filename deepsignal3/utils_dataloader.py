@@ -69,8 +69,15 @@ def _group_signals_by_movetable_v2(trimed_signals, movetable, stride):
     Used by process_data_bilstm to obtain variable-length per-base signals
     for mean / std / len computation.
     """
-    assert movetable[0] == 1
-    assert len(trimed_signals) >= len(movetable) * stride
+    if movetable[0] != 1:
+        raise ValueError(
+            f"move table must start with 1 (a move), got {movetable[0]}"
+        )
+    if len(trimed_signals) < len(movetable) * stride:
+        raise ValueError(
+            f"trimmed signal length ({len(trimed_signals)}) is shorter than "
+            f"expected ({len(movetable)} moves × stride {stride} = {len(movetable) * stride})"
+        )
     move_pos = np.append(np.argwhere(movetable == 1).flatten(), len(movetable))
     signal_group = []
     for i in range(len(move_pos) - 1):

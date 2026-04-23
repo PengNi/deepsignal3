@@ -392,8 +392,8 @@ def detect_file_type(path, recursive=True):
                 elif fname.endswith('.fast5'):
                     file_counts['fast5'] += 1
                     break
-            #if not recursive:
-            break
+            if not recursive:
+                break
         if file_counts['pod5'] > 0 and file_counts['slow5'] == 0 and file_counts['fast5'] == 0:
             return 'pod5'
         elif file_counts['slow5'] > 0 and file_counts['pod5'] == 0 and file_counts['fast5'] == 0:
