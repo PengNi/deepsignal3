@@ -2,12 +2,19 @@
 
 ## A deep learning tool for DNA methylation detection from modern Oxford Nanopore reads.
 
+Supports two model architectures: **modelMTM** (default, Multi-scale Temporal Mixer) and **ModelBiLSTM** (bidirectional LSTM), selectable via `--model_class`.
+
 ## Contents
 
 - [Installation](#Installation)
 - [Trained models](#Trained-models)
 - [Quick start](#Quick-start)
 - [Usage](#Usage)
+  - [1. Basecall](#1-basecall)
+  - [2. call modifications](#2-call-modifications)
+  - [3. call frequency of modifications](#3-call-frequency-of-modifications)
+  - [4. extract features](#4-extract-features)
+  - [5. train new models](#5-train-new-models)
 
 ## Installation
 
@@ -16,24 +23,29 @@ deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https:/
 - Prerequisites:\
    [Python3.\*](https://www.python.org/) (version >=3.12) \
    [Dorado](https://github.com/nanoporetech/dorado)\
-   [Guppy](https://nanoporetech.com/community)
+   [Guppy](https://nanoporetech.com/community) (for FAST5 input)
 - Dependencies: \
    [numpy](http://www.numpy.org/) \
    [h5py](https://github.com/h5py/h5py) \
    [statsmodels](https://github.com/statsmodels/statsmodels/) \
    [scikit-learn](https://scikit-learn.org/stable/) \
    [mappy](https://github.com/lh3/minimap2/tree/master/python) \
-   [PyTorch](https://pytorch.org/) (version >=1.2.0, <=2.1.0)
+   [pysam](https://github.com/pysam-developers/pysam) \
+   [pod5](https://github.com/nanoporetech/pod5-file-format) \
+   [pyslow5](https://github.com/hasindu2008/slow5lib) \
+   [PyTorch](https://pytorch.org/) (version >=2.0.0)
 
 #### 1. Create an environment
 
 We highly recommend to use a virtual environment for the installation of deepsignal3 and its dependencies. A virtual environment can be created and (de)activated as follows by using [conda](https://conda.io/docs/):
 
 ```bash
-# create
-conda create -n deepsignalpenv python=3.12
+# create (recommended: use environment.yml for exact dependency resolution)
+conda env create -f environment.yml
+# or create manually
+conda create -n deepsignal3 python=3.12
 # activate
-conda activate deepsignalpenv
+conda activate deepsignal3
 # deactivate
 conda deactivate
 ```
@@ -42,21 +54,21 @@ The virtual environment can also be created by using [virtualenv](https://github
 
 #### 2. Install deepsignal3
 
-- After creating and activating the environment, download deepsignal3 (**lastest version**) from github:
+- After creating and activating the environment, download deepsignal3 (**latest version**) from github:
 
 ```bash
 git clone https://github.com/PengNi/deepsignal3.git
 cd deepsignal3
-python setup.py install
+pip install -e .
 ```
 
-- [PyTorch](https://pytorch.org/) can be automatically installed during the installation of deepsignal3. However, if the version of [PyTorch](https://pytorch.org/) installed is not appropriate for your OS, an appropriate version should be re-installed in the same environment as the [instructions](https://pytorch.org/get-started/locally/):
+- [PyTorch](https://pytorch.org/) should be installed to match your CUDA version. See [PyTorch installation guide](https://pytorch.org/get-started/locally/):
 
 ```bash
-# install using conda
-conda install pytorch==1.11.0 cudatoolkit=10.2 -c pytorch
+# example: CUDA 11.8
+conda install pytorch=2.3.1 pytorch-cuda=11.8 -c pytorch -c nvidia
 # or install using pip
-pip install torch==1.11.0
+pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ## Trained models
@@ -81,10 +93,12 @@ Demo commands of using Dorado and deepsignal3 to call 5mC from POD5/SloW5/BloW5 
 
 ```bash
 # 1. dorado basecall using GPU
-dorado basecaller dna_r9.4.1_e8_sup@v3.3/ --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa  > demo.bam --batchsize 64
-# 2. deepsignal3 call_mods
-deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
+dorado basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa > demo.bam
+# 2. deepsignal3 call_mods (MTM model, default)
+deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
+# optional: neural-network refinement via AggrAttRNN (aggregate mode)
+deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m aggre_model.ckpt
 ```
 
 Demo commands of using Guppy and deepsignal3 to call 5mC from FAST5 files:
@@ -97,8 +111,7 @@ guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_
 # multi_fast5s/ is the folder where hg002.r10.4.test.fast5 is stored
 # fast5s_guppy/ is the output folder
 # 2. deepsignal3 call_mods
-# CG
-deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
@@ -137,13 +150,17 @@ For the example data:
 ```bash
 # call 5mCpGs for instance
 
-# extracted-feature file as input
-deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+# extracted-feature TSV file as input (MTM model, default)
+deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
-# pod5/slow5/blow5 files as input, use GPU
-deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.epoch7.ckpt --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4  --seq_len 21 --signal_len 15 -b 8192
+# pod5/slow5/blow5 files as input, MTM model (default), use GPU
+deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+
+# pod5/slow5/blow5 files as input, BiLSTM model
+deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.bilstm.ckpt --model_class bilstm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+
 # fast5 files as input, use GPU
-deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.epoch7.ckpt --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
@@ -161,20 +178,20 @@ The modification_call file is a tab-delimited text file in the following format:
 
 #### 3. call frequency of modifications
 
-A modification-frequency file can be generated by `call_freq` function with the call_mods file as input:
+`call_freq` supports two modes controlled by whether `--aggre_model` is provided:
+
+**Count mode** (default) — pure count-based aggregation:
 
 ```bash
-# call 5mCpGs for instance
-
-# output in tsv format
+# output in TSV format
 deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
 # output in bedMethyl format
 deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed
-# use --sort to sort the results
+# sort the results
 deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed --sort
 ```
 
-The modification_frequency file can be either saved in [bedMethyl](https://www.encodeproject.org/data-standards/wgbs/) format (by setting `--bed` as above), or saved as a tab-delimited text file in the following format by default:
+The default TSV output format:
 
 - **chrom**: the chromosome name
 - **pos**: 0-based position of the targeted base in the chromosome
@@ -187,6 +204,23 @@ The modification_frequency file can be either saved in [bedMethyl](https://www.e
 - **coverage**: number of reads aligned to the targeted base
 - **modification_frequency**: modification frequency
 - **k_mer**: the kmer around the targeted base
+
+**Aggregate mode** (`--aggre_model`) — neural-network refinement via **AggrAttRNN**, always outputs bedMethyl:
+
+```bash
+deepsignal3 call_freq \
+  --input_path pod5s.CG.call_mods.tsv \
+  --result_file pod5s.CG.aggregate.bed \
+  --aggre_model aggre_model.ckpt \
+  --cov_cf 4 \
+  --bin_size 20 \
+  --sort
+```
+
+Aggregate-mode parameters:
+- **--aggre_model / -m**: AggrAttRNN model checkpoint (.ckpt)
+- **--cov_cf**: minimum read coverage per site (default: 4)
+- **--bin_size**: histogram bin count for the probability distribution (default: 20)
 
 #### 4. extract features
 

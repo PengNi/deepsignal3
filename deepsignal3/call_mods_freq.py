@@ -1,6 +1,11 @@
 #! /usr/bin/env python
 """
-calculate modification frequency at genome level
+calculate modification frequency at genome level.
+
+Two modes:
+  - count mode  (default): pure count-based aggregation, TSV or bedMethyl output.
+  - aggregate mode (--aggre_model): neural-network refinement via AggrAttRNN,
+    always writes bedMethyl.
 """
 
 from __future__ import absolute_import
@@ -9,48 +14,71 @@ import argparse
 import os
 import sys
 import time
-
-from .utils.txt_formater import ModRecord
-from .utils.txt_formater import SiteStats
-from .utils.txt_formater import split_key
-
 import gzip
 
+from .utils.txt_formater import ModRecord, SiteStats, split_key
+
+
+# ─────────────────────────────────────────────
+# Shared file-collection helper
+# ─────────────────────────────────────────────
+
+def _collect_files(input_paths, file_uid=None):
+    mods_files = []
+    for ipath in input_paths:
+        input_path = os.path.abspath(ipath)
+        if os.path.isdir(input_path):
+            for ifile in os.listdir(input_path):
+                if file_uid is None or ifile.find(file_uid) != -1:
+                    mods_files.append(os.path.join(input_path, ifile))
+        elif os.path.isfile(input_path):
+            mods_files.append(input_path)
+        else:
+            raise ValueError("input_path not found: {}".format(input_path))
+    return mods_files
+
+
+def _open_file(path):
+    if path.endswith(".gz"):
+        return gzip.open(path, 'rt')
+    return open(path, 'r')
+
+
+# ─────────────────────────────────────────────
+# Mode 1: count-based frequency
+# ─────────────────────────────────────────────
 
 def calculate_mods_frequency(mods_files, prob_cf):
     sitekeys = set()
     sitekey2stats = dict()
-
     count, used = 0, 0
+
     for mods_file in mods_files:
-        if mods_file.endswith(".gz"):
-            infile = gzip.open(mods_file, 'rt')
-        else:
-            infile = open(mods_file, 'r')
-        for line in infile:
-            words = line.strip().split("\t")
-            mod_record = ModRecord(words)
-            if mod_record.is_record_callable(prob_cf):
-                if mod_record._site_key not in sitekeys:
-                    sitekeys.add(mod_record._site_key)
-                    sitekey2stats[mod_record._site_key] = SiteStats(
-                        mod_record._strand,
-                        mod_record._pos_in_strand,
-                        mod_record._kmer,
-                    )
-                sitekey2stats[mod_record._site_key]._prob_0 += mod_record._prob_0
-                sitekey2stats[mod_record._site_key]._prob_1 += mod_record._prob_1
-                sitekey2stats[mod_record._site_key]._coverage += 1
-                if mod_record._called_label == 1:
-                    sitekey2stats[mod_record._site_key]._met += 1
-                else:
-                    sitekey2stats[mod_record._site_key]._unmet += 1
-                used += 1
-            count += 1
-        infile.close()
-    print(
-        "{:.2f}% ({} of {}) calls used..".format(used / float(count) * 100, used, count)
-    )
+        with _open_file(mods_file) as infile:
+            for line in infile:
+                words = line.strip().split("\t")
+                mod_record = ModRecord(words)
+                if mod_record.is_record_callable(prob_cf):
+                    key = mod_record._site_key
+                    if key not in sitekeys:
+                        sitekeys.add(key)
+                        sitekey2stats[key] = SiteStats(
+                            mod_record._strand,
+                            mod_record._pos_in_strand,
+                            mod_record._kmer,
+                        )
+                    sitekey2stats[key]._prob_0 += mod_record._prob_0
+                    sitekey2stats[key]._prob_1 += mod_record._prob_1
+                    sitekey2stats[key]._coverage += 1
+                    if mod_record._called_label == 1:
+                        sitekey2stats[key]._met += 1
+                    else:
+                        sitekey2stats[key]._unmet += 1
+                    used += 1
+                count += 1
+
+    print("{:.2f}% ({} of {}) calls used..".format(
+        used / float(count) * 100, used, count))
     return sitekey2stats
 
 
@@ -61,142 +89,250 @@ def write_sitekey2stats(sitekey2stats, result_file, is_sort, is_bed):
         keys = list(sitekey2stats.keys())
 
     with open(result_file, "w") as wf:
-        # wf.write('\t'.join(['chromosome', 'pos', 'strand', 'pos_in_strand', 'prob0', 'prob1',
-        #                     'met', 'unmet', 'coverage', 'Rmet', 'kmer']) + '\n')
         for key in keys:
             chrom, pos = split_key(key)
-            sitestats = sitekey2stats[key]
-            assert sitestats._coverage == (sitestats._met + sitestats._unmet)
-            if sitestats._coverage > 0:
-                rmet = float(sitestats._met) / sitestats._coverage
-                if is_bed:
-                    wf.write(
-                        "\t".join(
-                            [
-                                chrom,
-                                str(pos),
-                                str(pos + 1),
-                                ".",
-                                str(sitestats._coverage),
-                                sitestats._strand,
-                                str(pos),
-                                str(pos + 1),
-                                "0,0,0",
-                                str(sitestats._coverage),
-                                str(int(round(rmet * 100 + 0.001, 0))),
-                            ]
-                        )
-                        + "\n"
-                    )
-                else:
-                    wf.write(
-                        "%s\t%d\t%s\t%s\t%.3f\t%.3f\t%d\t%d\t%d\t%.4f\t%s\n"
-                        % (
-                            chrom,
-                            pos,
-                            sitestats._strand,
-                            sitestats._pos_in_strand,
-                            sitestats._prob_0,
-                            sitestats._prob_1,
-                            sitestats._met,
-                            sitestats._unmet,
-                            sitestats._coverage,
-                            rmet,
-                            sitestats._kmer,
-                        )
-                    )
-            else:
+            s = sitekey2stats[key]
+            assert s._coverage == (s._met + s._unmet)
+            if s._coverage == 0:
                 print("{} {} has no coverage..".format(chrom, pos))
+                continue
+            rmet = float(s._met) / s._coverage
+            if is_bed:
+                wf.write("\t".join([
+                    chrom, str(pos), str(pos + 1), ".",
+                    str(s._coverage), s._strand,
+                    str(pos), str(pos + 1), "0,0,0",
+                    str(s._coverage),
+                    str(int(round(rmet * 100 + 0.001, 0))),
+                ]) + "\n")
+            else:
+                wf.write(
+                    "%s\t%d\t%s\t%s\t%.3f\t%.3f\t%d\t%d\t%d\t%.4f\t%s\n"
+                    % (chrom, pos, s._strand, s._pos_in_strand,
+                       s._prob_0, s._prob_1,
+                       s._met, s._unmet, s._coverage, rmet, s._kmer)
+                )
 
+
+# ─────────────────────────────────────────────
+# Mode 2: AggrAttRNN-based refinement
+# ─────────────────────────────────────────────
+
+def _get_normalized_histo(probs, binsize=20):
+    import numpy as np
+    if len(probs) == 0:
+        return None
+    hist, _ = np.histogram(probs, bins=binsize, range=[0., 1.])
+    norm = np.linalg.norm(hist)
+    return np.round(hist / (norm + 1e-8), 6)
+
+
+def _prepare_data(mods_files, prob_cf=0.0, cov_cf=4, bin_size=20):
+    """Read per-read calls from one or more TSV files, group by (chrom, pos)."""
+    from collections import defaultdict, Counter
+    import numpy as np
+
+    chrom_pos_data = defaultdict(lambda: defaultdict(lambda: {'probs': [], 'strands': []}))
+    count, used = 0, 0
+
+    for mods_file in mods_files:
+        with _open_file(mods_file) as f:
+            for line in f:
+                words = line.strip().split('\t')
+                if len(words) < 9:
+                    continue
+                try:
+                    mod_record = ModRecord(words)
+                except (ValueError, IndexError):
+                    continue
+                if not mod_record.is_record_callable(prob_cf):
+                    count += 1
+                    continue
+                chrom_pos_data[mod_record._chromosome][mod_record._pos][
+                    'probs'].append(mod_record._prob_1)
+                chrom_pos_data[mod_record._chromosome][mod_record._pos][
+                    'strands'].append(mod_record._strand)
+                count += 1
+                used += 1
+
+    print("{:.2f}% ({} of {}) calls used..".format(
+        used / float(count) * 100 if count else 0, used, count))
+
+    result = {}
+    for chrom, pos_dict in chrom_pos_data.items():
+        positions, histograms, coverages, strands = [], [], [], []
+        for refpos in sorted(pos_dict.keys()):
+            item = pos_dict[refpos]
+            cov = len(item['probs'])
+            if cov < cov_cf:
+                continue
+            hist = _get_normalized_histo(item['probs'], bin_size)
+            if hist is None:
+                continue
+            positions.append(refpos)
+            histograms.append(hist)
+            coverages.append(cov)
+            strands.append(Counter(item['strands']).most_common(1)[0][0])
+        if positions:
+            result[chrom] = {
+                'positions': positions,
+                'histograms': histograms,
+                'coverages': coverages,
+                'strands': strands,
+            }
+    return result
+
+
+def _run_aggr_model(positions, histograms, model, seq_len=11, batch_size=1024):
+    import numpy as np
+    import torch
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    if not positions:
+        return []
+
+    pad_len = seq_len // 2
+    device = next(model.parameters()).device
+
+    hist_mat = np.stack(histograms)
+    hist_padded = np.pad(hist_mat, ((pad_len, pad_len), (0, 0)), mode='constant')
+    hist_windows = np.swapaxes(sliding_window_view(hist_padded, seq_len, axis=0), 1, 2)
+
+    pos_arr = np.array(positions)
+    pos_padded = np.pad(pos_arr, (pad_len, pad_len),
+                        constant_values=(positions[0] - 10000, positions[-1] + 10000))
+    pos_windows = sliding_window_view(pos_padded, seq_len)
+    centers = np.repeat(pos_arr, seq_len).reshape(-1, seq_len)
+    pos_dist = np.abs(pos_windows - centers).astype(np.float32)
+
+    new_probs = []
+    for i in range(0, len(hist_windows), batch_size):
+        b_hist = torch.from_numpy(hist_windows[i:i + batch_size]).float().to(device)
+        b_pos = torch.from_numpy(pos_dist[i:i + batch_size]).float().to(device)
+        with torch.no_grad():
+            outputs = model(b_pos, b_hist)
+            probs = outputs.clamp(0.0, 1.0).cpu().numpy().flatten()
+            new_probs.extend(np.round(probs, 6).tolist())
+    return new_probs
+
+
+def _write_bedmethyl_aggr(data_dict, refined_probs_dict, output_file, is_sort=False):
+    chroms = sorted(data_dict.keys()) if is_sort else list(data_dict.keys())
+    with open(output_file, 'w') as f:
+        for chrom in chroms:
+            info = data_dict[chrom]
+            probs = refined_probs_dict.get(chrom, [])
+            for i, pos in enumerate(info['positions']):
+                cov = info['coverages'][i]
+                strand = info['strands'][i]
+                prob = probs[i]
+                perc = int(round(prob * 100 + 0.001, 0))
+                f.write("\t".join([
+                    chrom, str(pos), str(pos + 1), ".",
+                    str(cov), strand,
+                    str(pos), str(pos + 1), "0,0,0",
+                    str(cov), str(perc),
+                ]) + "\n")
+    print("bedMethyl written: {}".format(output_file))
+
+
+# ─────────────────────────────────────────────
+# Unified entry point
+# ─────────────────────────────────────────────
 
 def call_mods_frequency_to_file(args):
-    print("[main]call_freq starts..")
+    print("[call_freq] start..")
     start = time.time()
 
-    input_paths = args.input_path
-    result_file = args.result_file
-    prob_cf = args.prob_cf
-    file_uid = args.file_uid
-    issort = args.sort
-    isbed = args.bed
-
-    mods_files = []
-    for ipath in input_paths:
-        input_path = os.path.abspath(ipath)
-        if os.path.isdir(input_path):
-            for ifile in os.listdir(input_path):
-                if file_uid is None:
-                    mods_files.append("/".join([input_path, ifile]))
-                elif ifile.find(file_uid) != -1:
-                    mods_files.append("/".join([input_path, ifile]))
-        elif os.path.isfile(input_path):
-            mods_files.append(input_path)
-        else:
-            raise ValueError()
+    mods_files = _collect_files(args.input_path, getattr(args, 'file_uid', None))
     print("get {} input file(s)..".format(len(mods_files)))
 
-    print("reading the input files..")
-    sites_stats = calculate_mods_frequency(mods_files, prob_cf)
-    print("writing the result..")
-    write_sitekey2stats(sites_stats, result_file, issort, isbed)
-    print("[main]call_freq costs %.1f seconds.." % (time.time() - start))
+    aggre_model_path = getattr(args, 'aggre_model', None)
 
+    if aggre_model_path:
+        # ── aggregate (neural-network refinement) mode ──────────────────────
+        import torch
+        from collections import OrderedDict
+        from .models import AggrAttRNN
+
+        cov_cf   = getattr(args, 'cov_cf', 4)
+        bin_size = getattr(args, 'bin_size', 20)
+        prob_cf  = getattr(args, 'prob_cf', 0.0)
+        is_sort  = getattr(args, 'sort', False)
+
+        print("loading aggregate model from {}..".format(aggre_model_path))
+        model = AggrAttRNN(seq_len=11, num_layers=1, num_classes=1,
+                           dropout_rate=0, hidden_size=32,
+                           binsize=bin_size, model_type='attbigru', device='cpu')
+        checkpoint = torch.load(aggre_model_path, map_location='cpu', weights_only=True)
+        try:
+            model.load_state_dict(checkpoint)
+        except RuntimeError:
+            new_sd = OrderedDict(
+                (k[7:] if k.startswith('module.') else k, v)
+                for k, v in checkpoint.items()
+            )
+            model.load_state_dict(new_sd)
+        model.eval()
+
+        print("reading input files..")
+        data_dict = _prepare_data(mods_files, prob_cf=prob_cf,
+                                  cov_cf=cov_cf, bin_size=bin_size)
+
+        print("running AggrAttRNN inference..")
+        refined = {}
+        for chrom, info in data_dict.items():
+            refined[chrom] = _run_aggr_model(info['positions'], info['histograms'], model)
+
+        print("writing bedMethyl..")
+        _write_bedmethyl_aggr(data_dict, refined, args.result_file, is_sort=is_sort)
+
+    else:
+        # ── count-based frequency mode (original call_freq) ──────────────────
+        prob_cf = getattr(args, 'prob_cf', 0.0)
+        is_sort = getattr(args, 'sort', False)
+        is_bed  = getattr(args, 'bed', False)
+
+        print("reading input files..")
+        sites_stats = calculate_mods_frequency(mods_files, prob_cf)
+        print("writing result..")
+        write_sitekey2stats(sites_stats, args.result_file, is_sort, is_bed)
+
+    print("[call_freq] costs %.1f seconds.." % (time.time() - start))
+
+
+# ─────────────────────────────────────────────
+# CLI (standalone usage)
+# ─────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description="calculate frequency of interested sites at genome level"
+        description="calculate frequency of interested sites at genome level. "
+                    "With --aggre_model, uses AggrAttRNN neural-network refinement."
     )
-    parser.add_argument(
-        "--input_path",
-        "-i",
-        action="append",
-        type=str,
-        required=True,
-        help="an output file from call_mods/call_modifications.py, or a directory contains "
-        'a bunch of output files. this arg is in "append" mode, can be used multiple times',
-    )
-    parser.add_argument(
-        "--file_uid",
-        type=str,
-        action="store",
-        required=False,
-        default=None,
-        help="a unique str which all input files has, this is for finding all input files "
-        "and ignoring the not-input-files in a input directory. if input_path is a file, "
-        "ignore this arg.",
-    )
-
-    parser.add_argument(
-        "--result_file",
-        "-o",
-        action="store",
-        type=str,
-        required=True,
-        help="the file path to save the result",
-    )
-
-    parser.add_argument(
-        "--bed",
-        action="store_true",
-        default=False,
-        help="save the result in bedMethyl format",
-    )
-    parser.add_argument(
-        "--sort", action="store_true", default=False, help="sort items in the result"
-    )
-    parser.add_argument(
-        "--prob_cf",
-        type=float,
-        action="store",
-        required=False,
-        default=0,
-        help="this is to remove ambiguous calls. "
-        "if abs(prob1-prob0)>=prob_cf, then we use the call. e.g., proc_cf=0 "
-        "means use all calls. range [0, 1], default 0.",
-    )
+    parser.add_argument("--input_path", "-i", action="append", type=str, required=True,
+                        help="output file(s) from call_mods, or a directory. "
+                             "Can be used multiple times.")
+    parser.add_argument("--file_uid", type=str, default=None,
+                        help="unique string shared by all target files in a directory")
+    parser.add_argument("--result_file", "-o", type=str, required=True,
+                        help="output file path")
+    parser.add_argument("--bed", action="store_true", default=False,
+                        help="save in bedMethyl format (count mode only)")
+    parser.add_argument("--sort", action="store_true", default=False,
+                        help="sort output by chromosome and position")
+    parser.add_argument("--prob_cf", type=float, default=0.0,
+                        help="remove ambiguous calls where |prob1-prob0| < prob_cf, default 0.0")
+    # aggregate-mode options
+    parser.add_argument("--aggre_model", "-m", type=str, default=None,
+                        help="AggrAttRNN model checkpoint (.ckpt). "
+                             "When provided, uses neural-network refinement and always writes bedMethyl.")
+    parser.add_argument("--cov_cf", type=int, default=4,
+                        help="minimum read coverage per site for aggregate mode, default 4")
+    parser.add_argument("--bin_size", type=int, default=20,
+                        help="histogram bin count for aggregate mode, default 20")
 
     args = parser.parse_args()
-
     call_mods_frequency_to_file(args)
 
 

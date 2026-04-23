@@ -101,7 +101,6 @@ def main_trainm(args):
     display_args(args)
     train_multigpu(args)
 
-
 def main():
     parser = argparse.ArgumentParser(
         prog="deepsignal3",
@@ -576,6 +575,34 @@ def main():
         help="this is to remove ambiguous calls. "
         "if abs(prob1-prob0)>=prob_cf, then we use the call. e.g., proc_cf=0 "
         "means use all calls. range [0, 1], default 0.5.",
+    )
+
+    scf_aggr = sub_call_freq.add_argument_group("AGGREGATE")
+    scf_aggr.add_argument(
+        "--aggre_model",
+        "-m",
+        action="store",
+        type=str,
+        default=None,
+        required=False,
+        help="AggrAttRNN model checkpoint (.ckpt). "
+        "When provided, uses neural-network refinement and always writes bedMethyl.",
+    )
+    scf_aggr.add_argument(
+        "--cov_cf",
+        action="store",
+        type=int,
+        default=4,
+        required=False,
+        help="minimum read coverage per site for aggregate mode, default 4",
+    )
+    scf_aggr.add_argument(
+        "--bin_size",
+        action="store",
+        type=int,
+        default=20,
+        required=False,
+        help="histogram bin count for aggregate mode, default 20",
     )
 
     sub_call_freq.set_defaults(func=main_call_freq)

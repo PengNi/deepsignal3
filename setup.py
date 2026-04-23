@@ -45,7 +45,7 @@ def read(*parts):
     return codecs.open(os.path.join(here, *parts), 'r').read()
 
 
-long_description = read('README.rst')
+long_description = read('README.md')
 
 with open('requirements.txt', 'r') as rf:
     required = rf.read().splitlines()
@@ -53,37 +53,34 @@ with open('requirements.txt', 'r') as rf:
 setup(
     name='deepsignal3',
     packages=['deepsignal3', 'deepsignal3.utils'],
-    keywords=['methylation', 'nanopore', 'neural network'],
+    keywords=['methylation', 'nanopore', 'neural network', 'deep learning', '5mC'],
     version=__version__,
     url='https://github.com/PengNi/deepsignal3',
     download_url='https://github.com/PengNi/deepsignal3/archive/{}.tar.gz'.format(__version__),
     license='BSD 3-Clause Clear License',
     author='Peng Ni',
-    # tests_require=['pytest'],
     install_requires=required,
-    # cmdclass={'test': PyTest},
+    python_requires='>=3.12',
     author_email='543943952@qq.com',
     description='A deep-learning method for detecting DNA methylation state '
-                'from Oxford Nanopore sequencing pore-c reads',
+                'from Oxford Nanopore sequencing reads (modelMTM / ModelBiLSTM)',
     long_description=long_description,
+    long_description_content_type='text/markdown',
     entry_points={
         'console_scripts': [
             'deepsignal3=deepsignal3.deepsignal3:main',
             ],
         },
     platforms='any',
-    # test_suite='test',
     zip_safe=False,
     include_package_data=True,
-    # package_data={'deepsignal3': ['utils/*']},
     classifiers=[
         'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.12',
         'Development Status :: 4 - Beta',
         'Natural Language :: English',
         'License :: OSI Approved :: BSD License',
         'Operating System :: OS Independent',
+        'Topic :: Scientific/Engineering :: Bio-Informatics',
         ],
-    # extras_require={
-    #     'testing': ['pytest'],
-    #   },
 )
