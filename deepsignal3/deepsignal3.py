@@ -24,7 +24,7 @@ def main_extraction(args):
 
 
 def main_call_mods(args):
-    from .call_modifications import call_mods,inference_ultra
+    from .call_modifications import inference_ultra
 
     # from .call_modifications_transfer import call_mods as call_mods_transfer
     # from .call_modifications_domain import call_mods as call_mods_domain
