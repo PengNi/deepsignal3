@@ -43,7 +43,7 @@ def load_model_mtm(args, device):
         d_static=args.mtm_d_static,
         num_cls=args.class_num,
         ratios=args.mtm_ratios,
-        d_model=args.hid_rnn,
+        d_model=args.mtm_hid_rnn,
         r_hid=args.mtm_r_hid,
         drop=args.dropout_rate,
         norm_first=args.mtm_norm_first,
@@ -527,11 +527,11 @@ def main():
                       help="Base vocabulary size")
     p_hp.add_argument("--n_embed",      type=int,   default=4,
                       help="Base embedding dimension")
-    p_hp.add_argument("--hid_rnn",      type=int,   default=256,
-                      help="Hidden size (BiLSTM) / d_model (MTM)")
 
     # ── BiLSTM-specific ────────────────────────────
     p_lstm = parser.add_argument_group("BILSTM_HYPER")
+    p_lstm.add_argument("--hid_rnn",      type=int, default=256,
+                        help="Hidden size for BiLSTM")
     p_lstm.add_argument("--layernum1",    type=int, default=3)
     p_lstm.add_argument("--layernum2",    type=int, default=1)
     p_lstm.add_argument("--is_base",      type=str, default="yes")
@@ -541,8 +541,10 @@ def main():
     # ── MTM-specific ───────────────────────────────
     p_mtm = parser.add_argument_group("MTM_HYPER")
     p_mtm.add_argument("--mtm_num_base_features", type=int,   default=1)
-    p_mtm.add_argument("--mtm_d_static",          type=int,   default=0)
-    p_mtm.add_argument("--mtm_ratios",    nargs="+", type=int, default=[2, 2, 2])
+    p_mtm.add_argument("--mtm_hid_rnn",            type=int,   default=128,
+                        help="d_model (hidden size) for MTM")
+    p_mtm.add_argument("--mtm_d_static",          type=int,   default=1)
+    p_mtm.add_argument("--mtm_ratios",    nargs="+", type=int, default=[2, 2, 2, 2])
     p_mtm.add_argument("--mtm_r_hid",             type=int,   default=4)
     p_mtm.add_argument("--mtm_norm_first",  type=str2bool,    default="True")
     p_mtm.add_argument("--mtm_down_mode",   type=str,         default="concat",
@@ -565,8 +567,8 @@ def main():
 
     # ── Performance ────────────────────────────────
     p_perf = parser.add_argument_group("PERFORMANCE")
-    p_perf.add_argument("--batch_size", "-b", type=int, default=512)
-    p_perf.add_argument("--nproc",      "-p", type=int, default=4,
+    p_perf.add_argument("--batch_size", "-b", type=int, default=500)
+    p_perf.add_argument("--nproc",      "-p", type=int, default=10,
                          help="Number of IO producer processes")
 
     args = parser.parse_args()

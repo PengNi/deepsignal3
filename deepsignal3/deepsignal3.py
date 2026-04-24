@@ -266,17 +266,6 @@ def main():
         required=False,
         help="is using trace (base prob) feature of each base in seq model, default yes",
     )
-
-    sc_call.add_argument(
-        "--batch_size",
-        "-b",
-        default=512,
-        type=int,
-        required=False,
-        action="store",
-        help="batch size, default 512",
-    )
-
     # BiLSTM model param
     sc_call.add_argument(
         "--hid_rnn",
@@ -286,11 +275,23 @@ def main():
         help="BiLSTM hidden_size for combined feature",
     )
 
+    sc_call.add_argument(
+        "--batch_size",
+        "-b",
+        default=500,
+        type=int,
+        required=False,
+        action="store",
+        help="batch size, default 500",
+    )
+
     # MTM model params
     sc_mtm = sub_call_mods.add_argument_group("MTM_HYPER")
     sc_mtm.add_argument("--mtm_num_base_features", type=int, default=1, required=False)
-    sc_mtm.add_argument("--mtm_d_static", type=int, default=0, required=False)
-    sc_mtm.add_argument("--mtm_ratios", nargs="+", type=int, default=[2, 2, 2], required=False)
+    sc_mtm.add_argument("--mtm_hid_rnn", type=int, default=128, required=False,
+                        help="d_model (hidden size) for MTM, default 128")
+    sc_mtm.add_argument("--mtm_d_static", type=int, default=1, required=False)
+    sc_mtm.add_argument("--mtm_ratios", nargs="+", type=int, default=[2, 2, 2, 2], required=False)
     sc_mtm.add_argument("--mtm_r_hid", type=int, default=4, required=False)
     sc_mtm.add_argument("--mtm_norm_first", type=str, default="True", required=False)
     sc_mtm.add_argument("--mtm_down_mode", type=str, default="concat",
