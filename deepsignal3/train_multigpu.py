@@ -109,7 +109,7 @@ def train_worker(local_rank, global_world_size, args):
                     os.makedirs(model_dir)
                 else:
                     model_regex = re.compile(
-                        r"" + args.model_type + "\.b\d+_s\d+_epoch\d+\.ckpt*"
+                        r"" + args.model_class + "\.b\d+_s\d+_epoch\d+\.ckpt*"
                     )
                     for mfile in os.listdir(model_dir):
                         if model_regex.match(mfile) is not None:
@@ -129,7 +129,7 @@ def train_worker(local_rank, global_world_size, args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
         #local_rank
     )
 
@@ -306,7 +306,7 @@ def train_worker(local_rank, global_world_size, args):
                 if global_rank == 0:
                     # model.state_dict() or model.module.state_dict()?
                     torch.save(model.module.state_dict(),
-                               model_dir + args.model_type +
+                               model_dir + args.model_class +
                                '.b{}_s{}_epoch{}.ckpt'.format(args.seq_len, args.signal_len, epoch + 1))
                 # TODO: dist.barrier()? and read/sync model dict?
                 if v_accuracy > curr_best_accuracy:
@@ -317,7 +317,7 @@ def train_worker(local_rank, global_world_size, args):
                         v_accuracy_epoches[-1]:
                     if global_rank == 0:
                         torch.save(model.module.state_dict(),
-                                   model_dir + args.model_type +
+                                   model_dir + args.model_class +
                                    '.betterthanlast.b{}_s{}_epoch{}.ckpt'.format(args.seq_len,
                                                                                  args.signal_len,
                                                                                  epoch + 1))
@@ -355,7 +355,7 @@ def train_worker(local_rank, global_world_size, args):
             break
 
         if args.epoch_sync:
-            sync_ckpt = model_dir + args.model_type + \
+            sync_ckpt = model_dir + args.model_class + \
                         '.epoch_sync_node{}.b{}_epoch{}.ckpt'.format(args.node_rank, args.seq_len, epoch + 1)
             checkpoint(model, local_rank, sync_ckpt)
 
@@ -400,7 +400,7 @@ def train_worker_mtm(local_rank, global_world_size, args):
                 else:
                     # 清理旧的 checkpoint
                     model_regex = re.compile(
-                        r"" + args.model_type + r"\.b\d+_s\d+_p\d+_epoch\d+\.ckpt*"
+                        r"" + args.model_class + r"\.b\d+_s\d+_p\d+_epoch\d+\.ckpt*"
                     )
                     for mfile in os.listdir(model_dir):
                         if model_regex.match(mfile) is not None:
@@ -419,10 +419,10 @@ def train_worker_mtm(local_rank, global_world_size, args):
         d_static=args.mtm_d_static,
         num_cls=args.class_num,
         ratios=args.mtm_ratios,
-        d_model=args.hid_rnn,
+        d_model=args.mtm_hid_rnn,
         r_hid=args.mtm_r_hid,
         drop=args.dropout_rate,
-        norm_first=args.mtm_norm_first,
+        norm_first=str2bool(args.mtm_norm_first),
         down_mode=args.mtm_down_mode,
         vocab_size=args.n_vocab, 
         embedding_size=args.n_embed,
@@ -664,7 +664,7 @@ def train_worker_mtm(local_rank, global_world_size, args):
                 # [关键] 清洗 torch.compile 产生的 _orig_mod. 前缀
                 clean_dict = clean_state_dict(raw_state_dict)
 
-                save_path = model_dir + args.model_type + f'.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
+                save_path = model_dir + args.model_class + f'.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
                 torch.save(clean_dict, save_path)
                 
                 if v_best_score > curr_best_score:
@@ -672,7 +672,7 @@ def train_worker_mtm(local_rank, global_world_size, args):
                     curr_best_score_loc = epoch + 1
                 
                 if len(v_best_score_epoches) > 0 and v_best_score > v_best_score_epoches[-1]:
-                    better_path = model_dir + args.model_type + f'.betterthanlast.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
+                    better_path = model_dir + args.model_class + f'.betterthanlast.b{args.seq_len}_s{args.signal_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
                     torch.save(clean_dict, better_path)
 
             v_best_score_epoches.append(v_best_score)          
@@ -716,7 +716,7 @@ def train_worker_mtm(local_rank, global_world_size, args):
 
         # Epoch Sync (如果有需要)
         if args.epoch_sync:
-            sync_ckpt = model_dir + args.model_type + \
+            sync_ckpt = model_dir + args.model_class + \
                         f'.epoch_sync_node{args.node_rank}.b{args.seq_len}_p{args.offset}_epoch{epoch + 1}.ckpt'
             # 同样使用清洗后的 dict
             if local_rank == 0:
@@ -944,7 +944,7 @@ def train_worker_aggregate(local_rank, global_world_size, args):
 def train_multigpu(args):
     total_start = time.time()
     torch.manual_seed(args.tseed)
-    
+
     if use_cuda:
         torch.cuda.manual_seed(args.tseed)
 
@@ -961,7 +961,14 @@ def train_multigpu(args):
                                                                                    args.ngpus_per_node))
 
     global_world_size = args.ngpus_per_node * args.nodes
-    mp.spawn(train_worker, nprocs=args.ngpus_per_node, args=(global_world_size, args))
+
+    if args.model_class == "mtm":
+        worker_fn = train_worker_mtm
+    elif args.model_class == "aggregate":
+        worker_fn = train_worker_aggregate
+    else:
+        worker_fn = train_worker
+    mp.spawn(worker_fn, nprocs=args.ngpus_per_node, args=(global_world_size, args))
 
     endtime = time.time()
     clear_linecache()
@@ -979,13 +986,13 @@ def main():
 
     st_train = parser.add_argument_group("TRAIN MODEL_HYPER")
     st_train.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="both_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="bilstm",
+        choices=["bilstm", "mtm", "aggregate"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm",
+        help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
+             "'aggregate' (site-level AggrAttRNN). default: bilstm",
     )
     st_train.add_argument(
         "--seq_len",
@@ -1060,14 +1067,13 @@ def main():
 
     st_training = parser.add_argument_group("TRAINING")
     # model training
-    st_training.add_argument('--optim_type', type=str, default="Adam", choices=["Adam", "RMSprop", "SGD",
-                                                                                "Ranger", "LookaheadAdam"],
-                             required=False, help="type of optimizer to use, 'Adam', 'SGD', 'RMSprop', "
-                                                  "'Ranger' or 'LookaheadAdam', default Adam")
+    st_training.add_argument('--optim_type', type=str, default="Adam",
+                             choices=["Adam", "AdamW", "RMSprop", "SGD", "Ranger", "LookaheadAdam"],
+                             required=False, help="type of optimizer to use, default Adam")
     st_training.add_argument('--batch_size', type=int, default=512, required=False)
     st_training.add_argument('--lr_scheduler', type=str, default='StepLR', required=False,
-                             choices=["StepLR", "ReduceLROnPlateau"],
-                             help="StepLR or ReduceLROnPlateau, default StepLR")
+                             choices=["StepLR", "ReduceLROnPlateau", "CosineAnnealingLR"],
+                             help="StepLR, ReduceLROnPlateau or CosineAnnealingLR, default StepLR")
     st_training.add_argument('--lr', type=float, default=0.001, required=False,
                              help="default 0.001. [lr should be lr*world_size when using multi gpus? "
                                   "or lower batch_size?]")
@@ -1093,6 +1099,36 @@ def main():
     st_training.add_argument('--use_compile', type=str, default="no", required=False,
                              help="[EXPERIMENTAL] if using torch.compile, yes or no, "
                                   "default no ('yes' only works in pytorch>=2.0)")
+    st_training.add_argument('--patience', type=int, default=3, required=False,
+                             help="early stopping patience (epochs without improvement), default 5")
+
+    st_mtm = parser.add_argument_group("MTM MODEL_HYPER (--model_class mtm)")
+    st_mtm.add_argument('--mtm_num_base_features', type=int, default=1, required=False,
+                        help="number of raw signal features per base position, default 1")
+    st_mtm.add_argument('--mtm_hid_rnn', type=int, default=128, required=False,
+                        help="d_model (hidden size) for MTM, default 128")
+    st_mtm.add_argument('--mtm_d_static', type=int, default=1, required=False,
+                        help="dimension of static feature vector (d_static), default 1")
+    st_mtm.add_argument('--mtm_ratios', type=int, nargs='+', default=[2, 2, 2, 2], required=False,
+                        help="downsampling ratios for MTM, e.g. --mtm_ratios 2 2 2 2, default [2, 2, 2, 2]")
+    st_mtm.add_argument('--mtm_r_hid', type=int, default=4, required=False,
+                        help="hidden ratio in TokenMixingLayer MLP, default 4")
+    st_mtm.add_argument('--mtm_norm_first', type=str, default="True", required=False,
+                        help="pre-norm (True) or post-norm (False) in TokenMixingLayer, default True")
+    st_mtm.add_argument('--mtm_down_mode', type=str, default="concat",
+                        choices=["concat", "avg", "max"], required=False,
+                        help="downsampling aggregation mode, default concat")
+    st_mtm.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
+                        help="number of temporal attention layers per TokenMixingLayer, default 2")
+    st_mtm.add_argument('--offset', type=int, default=0, required=False,
+                        help="offset parameter recorded in checkpoint filename, default 0")
+
+    st_agg = parser.add_argument_group("AGGREGATE MODEL_HYPER (--model_class aggregate)")
+    st_agg.add_argument('--aggregate_model_type', type=str, default="attbigru",
+                        choices=["attbigru", "transformer"], required=False,
+                        help="aggregate model architecture, default attbigru")
+    st_agg.add_argument('--aggregate_hidden', type=int, default=256, required=False,
+                        help="hidden size for aggregate model, default 256")
 
     st_trainingp = parser.add_argument_group("TRAINING PARALLEL")
     st_trainingp.add_argument("--nodes", default=1, type=int,

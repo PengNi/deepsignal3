@@ -862,13 +862,12 @@ def main():
     st_train = sub_train.add_argument_group("TRAIN")
     # model input
     st_train.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="both_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="bilstm",
+        choices=["bilstm"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm",
+        help="model class, default: bilstm",
     )
     st_train.add_argument(
         "--seq_len",
@@ -1147,13 +1146,13 @@ def main():
 
     stm_train = sub_trainm.add_argument_group("TRAIN MODEL_HYPER")
     stm_train.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="both_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="bilstm",
+        choices=["bilstm", "mtm", "aggregate"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm",
+        help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
+             "'aggregate' (site-level AggrAttRNN). default: bilstm",
     )
     stm_train.add_argument(
         "--seq_len",
@@ -1228,14 +1227,13 @@ def main():
 
     stm_training = sub_trainm.add_argument_group("TRAINING")
     # model training
-    stm_training.add_argument('--optim_type', type=str, default="Adam", choices=["Adam", "RMSprop", "SGD",
-                                                                                "Ranger", "LookaheadAdam"],
-                             required=False, help="type of optimizer to use, 'Adam', 'SGD', 'RMSprop', "
-                                                  "'Ranger' or 'LookaheadAdam', default Adam")
+    stm_training.add_argument('--optim_type', type=str, default="Adam",
+                             choices=["Adam", "AdamW", "RMSprop", "SGD", "Ranger", "LookaheadAdam"],
+                             required=False, help="type of optimizer to use, default Adam")
     stm_training.add_argument('--batch_size', type=int, default=512, required=False)
     stm_training.add_argument('--lr_scheduler', type=str, default='StepLR', required=False,
-                             choices=["StepLR", "ReduceLROnPlateau"],
-                             help="StepLR or ReduceLROnPlateau, default StepLR")
+                             choices=["StepLR", "ReduceLROnPlateau", "CosineAnnealingLR"],
+                             help="StepLR, ReduceLROnPlateau or CosineAnnealingLR, default StepLR")
     stm_training.add_argument('--lr', type=float, default=0.001, required=False,
                              help="default 0.001. [lr should be lr*world_size when using multi gpus? "
                                   "or lower batch_size?]")
@@ -1261,7 +1259,36 @@ def main():
     stm_training.add_argument('--use_compile', type=str, default="no", required=False,
                              help="[EXPERIMENTAL] if using torch.compile, yes or no, "
                                   "default no ('yes' only works in pytorch>=2.0)")
-    stm_training.add_argument('--lambda_corr','--a', type=float, default=0.1)
+    stm_training.add_argument('--patience', type=int, default=3, required=False,
+                             help="early stopping patience (epochs without improvement), default 5")
+
+    stm_mtm = sub_trainm.add_argument_group("MTM MODEL_HYPER (--model_class mtm)")
+    stm_mtm.add_argument('--mtm_num_base_features', type=int, default=1, required=False,
+                         help="number of raw signal features per base position, default 1")
+    stm_mtm.add_argument('--mtm_hid_rnn', type=int, default=128, required=False,
+                         help="d_model (hidden size) for MTM, default 128")
+    stm_mtm.add_argument('--mtm_d_static', type=int, default=1, required=False,
+                         help="dimension of static feature vector (d_static), default 1")
+    stm_mtm.add_argument('--mtm_ratios', type=int, nargs='+', default=[2, 2, 2, 2], required=False,
+                         help="downsampling ratios for MTM, e.g. --mtm_ratios 2 2 2 2, default [2, 2, 2, 2]")
+    stm_mtm.add_argument('--mtm_r_hid', type=int, default=4, required=False,
+                         help="hidden ratio in TokenMixingLayer MLP, default 4")
+    stm_mtm.add_argument('--mtm_norm_first', type=str, default="True", required=False,
+                         help="pre-norm (True) or post-norm (False) in TokenMixingLayer, default True")
+    stm_mtm.add_argument('--mtm_down_mode', type=str, default="concat",
+                         choices=["concat", "avg", "max"], required=False,
+                         help="downsampling aggregation mode, default concat")
+    stm_mtm.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
+                         help="number of temporal attention layers per TokenMixingLayer, default 2")
+    stm_mtm.add_argument('--offset', type=int, default=0, required=False,
+                         help="offset parameter recorded in checkpoint filename, default 0")
+
+    stm_agg = sub_trainm.add_argument_group("AGGREGATE MODEL_HYPER (--model_class aggregate)")
+    stm_agg.add_argument('--aggregate_model_type', type=str, default="attbigru",
+                         choices=["attbigru", "transformer"], required=False,
+                         help="aggregate model architecture, default attbigru")
+    stm_agg.add_argument('--aggregate_hidden', type=int, default=256, required=False,
+                         help="hidden size for aggregate model, default 256")
 
     stm_trainingp = sub_trainm.add_argument_group("TRAINING PARALLEL")
     stm_trainingp.add_argument("--nodes", default=1, type=int,

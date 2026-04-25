@@ -58,7 +58,7 @@ def train(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"  # not quite understand of raw string
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -78,7 +78,7 @@ def train(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -184,7 +184,7 @@ def train(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -258,7 +258,7 @@ def train_transfer(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -278,7 +278,7 @@ def train_transfer(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     classifier1 = Classifier1()
     classifier2 = Classifier2()
@@ -460,7 +460,7 @@ def train_transfer(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -468,7 +468,7 @@ def train_transfer(args):
                             torch.save(
                                 classifier1.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.classifier1.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -476,7 +476,7 @@ def train_transfer(args):
                             torch.save(
                                 classifier2.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.classifier2.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -554,7 +554,7 @@ def train_domain(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -574,7 +574,7 @@ def train_domain(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     classifier1 = Classifier1()
     if use_cuda:
@@ -724,7 +724,7 @@ def train_domain(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -732,7 +732,7 @@ def train_domain(args):
                             torch.save(
                                 classifier1.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.classifier1.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -807,7 +807,7 @@ def train_fusion(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -827,7 +827,7 @@ def train_fusion(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     model2 = ModelExtraction(
         args.seq_len,
@@ -842,7 +842,7 @@ def train_fusion(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     model3 = ModelExtraction(
         args.seq_len,
@@ -857,7 +857,7 @@ def train_fusion(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     classifier1 = Classifier1()
     classifier2 = Classifier1()
@@ -1063,7 +1063,7 @@ def train_fusion(args):
                             torch.save(
                                 model1.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -1143,7 +1143,7 @@ def train_cnn(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1163,7 +1163,7 @@ def train_cnn(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -1269,7 +1269,7 @@ def train_cnn(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -1343,7 +1343,7 @@ def train_cg(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1363,7 +1363,7 @@ def train_cg(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -1494,7 +1494,7 @@ def train_cg(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -1568,7 +1568,7 @@ def train_combine(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1588,7 +1588,7 @@ def train_combine(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -1719,7 +1719,7 @@ def train_combine(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -1793,7 +1793,7 @@ def trainFreq(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -1813,7 +1813,7 @@ def trainFreq(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -1933,7 +1933,7 @@ def trainFreq(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -2007,7 +2007,7 @@ def trainFreq_mp(args):
             os.makedirs(model_dir)
         else:
             model_regex = re.compile(
-                r"" + args.model_type + r".b\d+_s\d+_epoch\d+.ckpt*"
+                r"" + args.model_class + r".b\d+_s\d+_epoch\d+.ckpt*"
             )
             for mfile in os.listdir(model_dir):
                 if model_regex.match(mfile):
@@ -2027,7 +2027,7 @@ def trainFreq_mp(args):
         str2bool(args.is_base),
         str2bool(args.is_signallen),
         str2bool(args.is_trace),
-        args.model_type,
+        "both_bilstm",
     )
     if use_cuda:
         model = model.cuda()
@@ -2152,7 +2152,7 @@ def trainFreq_mp(args):
                             torch.save(
                                 model.state_dict(),
                                 model_dir
-                                + args.model_type
+                                + args.model_class
                                 + ".b{}_s{}_epoch{}.ckpt".format(
                                     args.seq_len, args.signal_len, epoch + 1
                                 ),
@@ -2206,13 +2206,12 @@ def main():
 
     # model input
     parser.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="both_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="bilstm",
+        choices=["bilstm"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: both_bilstm",
+        help="model class, default: bilstm",
     )
     parser.add_argument(
         "--seq_len",
