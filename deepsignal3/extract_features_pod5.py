@@ -27,6 +27,7 @@ from .utils.process_utils import str2bool
 from .utils.process_utils import display_args
 from .utils.process_utils import get_files
 from .utils.process_utils import get_refloc_of_methysite_in_motif
+from .utils.process_utils import compute_proximity_tag
 from .utils.process_utils import get_motif_seqs
 from .utils.process_utils import fill_files_queue
 from .utils.process_utils import read_position_file
@@ -67,6 +68,7 @@ def _features_to_str(features):
         signal_lens,
         k_signals_rect,   # (kmer_len, signals_len) float32 array, 0-padded
         methy_label,
+        tag,              # 0/1 — any C within ±10 bp of the target site in read seq
     ) = features
     means_text      = ",".join([str(x) for x in np.around(signal_means, decimals=6)])
     stds_text       = ",".join([str(x) for x in np.around(signal_stds,  decimals=6)])
@@ -87,6 +89,7 @@ def _features_to_str(features):
         signal_len_text,
         k_signals_text,
         str(methy_label),
+        str(tag),
     ])
 
 
@@ -107,8 +110,19 @@ def process_data(
     methyloc=0,
     methy_label=1,
     norm_method="mad",
+    plant=False,
 ):
-    """Extract TSV feature strings from one (signal, seq_read) pair."""
+    """Extract TSV feature strings from one (signal, seq_read) pair.
+
+    Parameters
+    ----------
+    plant : bool
+        If True  (plant mode) : tag = 1 when any other C exists within ±10 bp.
+        If False (human mode) : tag = 1 when any other same-motif site (as
+            defined by motif_seqs) exists within ±10 bp.
+        Both modes use the same read-sequence-based computation, so training
+        and inference are always consistent when the same flag is passed.
+    """
     if kmer_len % 2 == 0:
         raise ValueError("kmer_len must be odd")
     num_bases = (kmer_len - 1) // 2
@@ -143,6 +157,14 @@ def process_data(
     signal_group = _group_signals_by_movetable_v2(norm_signals, mv_table, stride)
 
     tsite_locs = get_refloc_of_methysite_in_motif(seq, set(motif_seqs), methyloc)
+
+    # Pre-compute tag reference locs once per read (not per site):
+    #   plant=True  → all C positions (motif-agnostic)
+    #   plant=False → same-motif positions only (= tsite_locs itself)
+    if plant:
+        tag_locs = [i for i, b in enumerate(seq) if b == "C"]
+    else:
+        tag_locs = tsite_locs   # already sorted
 
     strand      = "."
     ref_name    = "."
@@ -190,6 +212,8 @@ def process_data(
             if key_sep.join([ref_name, str(ref_pos), strand]) not in positions:
                 continue
 
+        tag = compute_proximity_tag(loc, tag_locs, window=10)
+
         k_mer     = seq[loc - num_bases: loc + num_bases + 1]
         k_sigs_v  = signal_group[loc - num_bases: loc + num_bases + 1]
         signal_means = np.array([np.mean(x) for x in k_sigs_v], dtype=np.float32)
@@ -214,6 +238,7 @@ def process_data(
                 signal_lens,
                 k_signals_rect,
                 methy_label,
+                tag,
             ))
         )
 
@@ -241,6 +266,7 @@ def process_sig_seq(
     norm_method="mad",
     nproc_extract=1,
     is_single=False,
+    plant=False,
 ):
     LOGGER.info("extract_features process-{} starts".format(os.getpid()))
     while True:
@@ -259,7 +285,7 @@ def process_sig_seq(
                     feats = process_data(
                         signal, seq_read, motif_seqs, positions,
                         kmer_len, signals_len, mapq, coverage_ratio, identity,
-                        methyloc, methy_label, norm_method,
+                        methyloc, methy_label, norm_method, plant,
                     )
                     if feats:
                         while feature_Q.qsize() > (nproc_extract if nproc_extract > 1 else 2) * 3:
@@ -345,6 +371,7 @@ def extract_features(args):
     feature_Q = Queue()
     nproc     = max(1, args.nproc - 1)
 
+    plant = getattr(args, "plant", False)
     workers = []
     for proc_idx in range(nproc):
         p = mp.Process(
@@ -355,7 +382,7 @@ def extract_features(args):
                 args.seq_len, args.signal_len,
                 args.mapq, args.coverage_ratio, args.identity,
                 args.mod_loc, args.methy_label, args.normalize_method,
-                nproc, is_single,
+                nproc, is_single, plant,
             ),
             name="extracter_{:03d}".format(proc_idx),
         )
@@ -415,6 +442,10 @@ def main():
                        help="signals per base in rect matrix, default 15")
     g_ext.add_argument("--motifs", default="CG",
                        help="motif(s) to extract, comma-separated, default CG")
+    g_ext.add_argument("--plant", action="store_true", default=False,
+                       help="plant mode: proximity tag counts any C within "
+                            "±10 bp (motif-agnostic). Default (human mode): "
+                            "only same-motif sites are counted.")
     g_ext.add_argument("--mod_loc", type=int, default=0,
                        help="0-based position of target base in motif, default 0")
     g_ext.add_argument("--positions", default=None,

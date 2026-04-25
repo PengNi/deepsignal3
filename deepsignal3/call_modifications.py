@@ -564,6 +564,10 @@ def main():
     p_ext.add_argument("--positions",        type=str,   default=None,
                         help="Position filter file")
     p_ext.add_argument("--rna",              action="store_true", default=False)
+    p_ext.add_argument("--plant",            action="store_true", default=False,
+                        help="Plant mode: proximity tag counts any C within "
+                             "±10 bp (motif-agnostic). Default (human mode): "
+                             "only same-motif sites are counted.")
 
     # ── Performance ────────────────────────────────
     p_perf = parser.add_argument_group("PERFORMANCE")

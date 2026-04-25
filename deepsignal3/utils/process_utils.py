@@ -1,4 +1,5 @@
 from __future__ import absolute_import
+import bisect
 import fnmatch
 import os
 import random
@@ -12,7 +13,7 @@ import logging
 import re
 from statsmodels import robust
 import time
-from typing import Union, Tuple, List
+from typing import List, Tuple, Union
 
 time_wait = 0.1
 
@@ -261,6 +262,25 @@ def fill_files_queue(files_q, files, batch_size=1, is_single=False):
 #         if seqstr[i:i + motiflen] == motif:
 #             sites.append(i+methyloc_in_motif)
 #     return sites
+
+
+def compute_proximity_tag(loc: int, tag_locs: List[int], window: int = 10) -> int:
+    """
+    Return 1 if any position in tag_locs (other than loc itself) falls within
+    [loc-window, loc+window].  tag_locs must be sorted ascending.
+
+    Used to compute the static proximity tag for methylation calling:
+      - human mode  : tag_locs = CG positions in the read
+      - plant mode  : tag_locs = all C positions in the read
+
+    O(log n) via bisect; the inner loop only visits positions inside the window.
+    """
+    lo = bisect.bisect_left(tag_locs, loc - window)
+    hi = bisect.bisect_right(tag_locs, loc + window)
+    for i in range(lo, hi):
+        if tag_locs[i] != loc:
+            return 1
+    return 0
 
 
 def get_refloc_of_methysite_in_motif(seqstr, motifset, methyloc_in_motif=0):

@@ -217,7 +217,7 @@ def train_worker(local_rank, global_world_size, args):
         tlosses = []
         start = time.time()
         for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels = (
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = (
                 sfeatures
             )
             kmer = kmer.cuda(local_rank, non_blocking=True)
@@ -261,7 +261,7 @@ def train_worker(local_rank, global_world_size, args):
         with torch.no_grad():
             vlosses, vlabels_total, vpredicted_total = [], [], []
             v_meanloss = 10000
-            for vi, vsfeatures in enumerate(valid_loader):
+            for vsfeatures in valid_loader:
                 (
                     _,
                     vkmer,
@@ -270,6 +270,7 @@ def train_worker(local_rank, global_world_size, args):
                     vbase_signal_lens,
                     vsignals,
                     vlabels,
+                    _vtags,
                 ) = vsfeatures
 
                 vkmer = vkmer.cuda(local_rank, non_blocking=True)

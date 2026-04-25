@@ -109,7 +109,7 @@ def train(args):
         tlosses = []
         start = time.time()
         for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels = (
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = (
                 sfeatures
             )
             if use_cuda:
@@ -138,7 +138,7 @@ def train(args):
                 model.eval()
                 with torch.no_grad():
                     vlosses, vaccus, vprecs, vrecas = [], [], [], []
-                    for vi, vsfeatures in enumerate(valid_loader):
+                    for vsfeatures in valid_loader:
                         (
                             _,
                             vkmer,
@@ -147,6 +147,7 @@ def train(args):
                             vbase_signal_lens,
                             vsignals,
                             vlabels,
+                            _vtags,
                         ) = vsfeatures
                         if use_cuda:
                             vkmer = vkmer.cuda()
@@ -949,7 +950,7 @@ def train_fusion(args):
         tlosses = []
         start = time.time()
         for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels = (
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = (
                 sfeatures
             )
             if use_cuda:
@@ -1024,6 +1025,7 @@ def train_fusion(args):
                             vbase_signal_lens,
                             vsignals,
                             vlabels,
+                            _vtags,
                         ) = vsfeatures
                         if use_cuda:
                             vkmer = vkmer.cuda()
@@ -1192,7 +1194,7 @@ def train_cnn(args):
         tlosses = []
         start = time.time()
         for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels = (
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = (
                 sfeatures
             )
             if use_cuda:
@@ -1221,7 +1223,7 @@ def train_cnn(args):
                 model.eval()
                 with torch.no_grad():
                     vlosses, vaccus, vprecs, vrecas = [], [], [], []
-                    for vi, vsfeatures in enumerate(valid_loader):
+                    for vsfeatures in valid_loader:
                         (
                             _,
                             vkmer,
@@ -1230,6 +1232,7 @@ def train_cnn(args):
                             vbase_signal_lens,
                             vsignals,
                             vlabels,
+                            _vtags,
                         ) = vsfeatures
                         if use_cuda:
                             vkmer = vkmer.cuda()

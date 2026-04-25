@@ -20,6 +20,7 @@ import pyslow5
 
 from .utils.process_utils import get_logger
 from .utils.process_utils import get_refloc_of_methysite_in_motif
+from .utils.process_utils import compute_proximity_tag
 from .utils.process_utils import normalize_signals
 from .utils.process_utils import base2code_dna
 from .utils import bam_reader
@@ -190,6 +191,10 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
     Extract features for modelMTM inference.
     Output per site: (sampleinfo, k_seq[int64], k_signals_rect[float32], label, tag)
     No mean/std/len – fastest path.
+
+    args.plant (bool):
+        True  → tag counts any C within ±10 bp (plant / multi-motif mode)
+        False → tag counts only same-motif sites within ±10 bp (human / CG mode)
     """
     parsed = _parse_bam_read(signal, seq_read, args)
     if parsed is None:
@@ -216,8 +221,15 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
 
+    # Pre-compute tag_locs once per read
+    plant = getattr(args, "plant", False)
+    if plant:
+        tag_locs = [i for i, b in enumerate(seq) if b == "C"]
+    else:
+        tag_locs = tsite_locs  # already sorted
+
     out = []
-    for i, loc in enumerate(tsite_locs):
+    for loc in tsite_locs:
         if not (num_bases <= loc < len(seq) - num_bases):
             continue
 
@@ -238,12 +250,7 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
             if f"{ref_name}\t{ref_pos}\t{strand}" not in positions:
                 continue
 
-        # proximity tag: 0 = isolated, 1 = within 10 bp of another CpG
-        tag = 0
-        if i > 0 and (loc - tsite_locs[i - 1]) <= 10:
-            tag = 1
-        elif i < len(tsite_locs) - 1 and (tsite_locs[i + 1] - loc) <= 10:
-            tag = 1
+        tag = compute_proximity_tag(loc, tag_locs, window=10)
 
         k_mer = seq[loc - num_bases: loc + num_bases + 1]
         k_seq = np.fromiter(
@@ -265,6 +272,8 @@ def process_data_bilstm(signal, seq_read, motif_seqs, positions, args):
         (sampleinfo, k_seq[int64], means[float32], stds[float32],
          lens[int32], k_signals_rect[float32], label)
     Computes per-base mean/std/len via variable-length signal grouping.
+
+    args.plant (bool): same semantics as process_data_fast.
     """
     parsed = _parse_bam_read(signal, seq_read, args)
     if parsed is None:
@@ -292,6 +301,14 @@ def process_data_bilstm(signal, seq_read, motif_seqs, positions, args):
 
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
+
+    # Pre-compute tag_locs once per read (BiLSTM currently doesn't use tag,
+    # but keeping the logic symmetric for future use)
+    plant = getattr(args, "plant", False)
+    if plant:
+        tag_locs = [i for i, b in enumerate(seq) if b == "C"]
+    else:
+        tag_locs = tsite_locs  # already sorted
 
     out = []
     for loc in tsite_locs:

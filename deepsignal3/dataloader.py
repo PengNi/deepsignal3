@@ -20,14 +20,12 @@ def parse_a_line1(line):
     base_means = np.array([float(x) for x in words[7].split(",")])
     base_stds = np.array([float(x) for x in words[8].split(",")])
     base_signal_lens = np.array([int(x) for x in words[9].split(",")])
-    # base_probs = np.zeros(base_signal_lens.shape[0])
-    # base_probs = np.array([float(x) for x in words[10].split(",")])
 
     k_signals = np.array(
         [[float(y) for y in x.split(",")] for x in words[10].split(";")]
     )
     label = int(words[11])
-    # tag = int(words[13])
+    tag = np.array([int(words[12])])
 
     return (
         sampleinfo,
@@ -37,7 +35,8 @@ def parse_a_line1(line):
         base_signal_lens,
         k_signals,
         label,
-    )  # , tag
+        tag,
+    )
 
 
 def parse_a_line2(line):
