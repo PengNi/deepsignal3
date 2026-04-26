@@ -213,7 +213,6 @@ class ModelBiLSTM(nn.Module):
 
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax(1)
-        self.projection = nn.Linear(self.nhid_seq, self.nhid_signal )
         #self.save_hyperparameters()
         
     # def training_step(self, batch, batch_idx):
