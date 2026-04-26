@@ -25,7 +25,7 @@ def parse_a_line1(line):
         [[float(y) for y in x.split(",")] for x in words[10].split(";")]
     )
     label = int(words[11])
-    tag = np.array([int(words[12])])
+    tag = int(words[12])
 
     return (
         sampleinfo,
