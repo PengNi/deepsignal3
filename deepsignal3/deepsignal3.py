@@ -1130,6 +1130,20 @@ def main():
     sd_mtm.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
                         help="MTM: temporal attention layers per TokenMixingLayer, default 2")
     #
+    sd_ddp = sub_denoise.add_argument_group("DISTRIBUTED")
+    sd_ddp.add_argument('--bias', type=int, default=0, required=False,
+                        help="kmer slice start offset for BiLSTM denoise, default 0")
+    sd_ddp.add_argument('--nodes', type=int, default=1,
+                        help="number of nodes, default 1")
+    sd_ddp.add_argument('--ngpus_per_node', type=int, default=2,
+                        help="number of GPUs per node, default 2")
+    sd_ddp.add_argument('--dist_url', type=str, default="tcp://127.0.0.1:12315",
+                        help="url used to set up distributed training")
+    sd_ddp.add_argument('--node_rank', type=int, default=0,
+                        help="node rank for distributed training, default 0")
+    sd_ddp.add_argument('--dl_num_workers', type=int, default=0,
+                        help="DataLoader num_workers, default 0")
+    #
     sub_denoise.set_defaults(func=main_denoise)
 
     # sub_train_multigpu =====================================================================================
