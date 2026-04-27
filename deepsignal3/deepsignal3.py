@@ -1010,15 +1010,13 @@ def main():
         required=False,
         help="is filter false negative samples, , 'yes' or 'no', default no",
     )
-    # # model input
     sd_train.add_argument(
-        "--model_type",
+        "--model_class",
         type=str,
-        default="signal_bilstm",
-        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
+        default="bilstm",
+        choices=["bilstm", "mtm"],
         required=False,
-        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-        "'both_bilstm' means to use both seq and signal bilstm, default: signal_bilstm",
+        help="which model to use for denoise: 'bilstm' (default) or 'mtm'",
     )
     sd_train.add_argument(
         "--seq_len",
@@ -1075,13 +1073,6 @@ def main():
         required=False,
         help="is using signal length feature of each base in seq model, default yes",
     )
-    sd_train.add_argument(
-        "--is_trace",
-        type=str,
-        default="no",
-        required=False,
-        help="is using trace (base prob) feature of each base in seq model, default yes",
-    )
     # # BiLSTM model param
     sd_train.add_argument(
         "--hid_rnn",
@@ -1121,18 +1112,23 @@ def main():
         default=False,
         help="if output probs of samples after 1st iteration",
     )
-    sd_denoise.add_argument("--nodes", default=1, type=int,
-                              help="number of nodes for distributed training, default 1")
-    sd_denoise.add_argument("--ngpus_per_node", default=2, type=int,
-                              help="number of GPUs per node for distributed training, default 2")
-    sd_denoise.add_argument("--dist-url", default="tcp://127.0.0.1:12315", type=str,
-                              help="url used to set up distributed training")
-    sd_denoise.add_argument("--node_rank", default=0, type=int,
-                              help="node rank for distributed training, default 0")
-    sd_denoise.add_argument("--epoch_sync", action="store_true", default=False,
-                              help="if sync model params of gpu0 to other local gpus after per epoch")
-    sd_denoise.add_argument('--dl_num_workers', type=int, default=0, required=False,
-                             help="default 0")
+    #
+    sd_mtm = sub_denoise.add_argument_group("MTM_HYPER (--model_class mtm)")
+    sd_mtm.add_argument('--mtm_num_base_features', type=int, default=1, required=False,
+                        help="MTM: raw signal features per base, default 1")
+    sd_mtm.add_argument('--mtm_hid_rnn', type=int, default=128, required=False,
+                        help="MTM: d_model hidden size, default 128")
+    sd_mtm.add_argument('--mtm_ratios', type=int, nargs='+', default=[2, 2, 2, 2], required=False,
+                        help="MTM: downsampling ratios, default [2,2,2,2]")
+    sd_mtm.add_argument('--mtm_r_hid', type=int, default=4, required=False,
+                        help="MTM: MLP hidden ratio in TokenMixingLayer, default 4")
+    sd_mtm.add_argument('--mtm_norm_first', type=str, default="True", required=False,
+                        help="MTM: pre-norm (True) or post-norm (False), default True")
+    sd_mtm.add_argument('--mtm_down_mode', type=str, default="concat",
+                        choices=["concat", "avg", "max"], required=False,
+                        help="MTM: downsampling mode, default concat")
+    sd_mtm.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
+                        help="MTM: temporal attention layers per TokenMixingLayer, default 2")
     #
     sub_denoise.set_defaults(func=main_denoise)
 

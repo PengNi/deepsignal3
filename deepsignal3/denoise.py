@@ -10,7 +10,7 @@ from sklearn import metrics
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import StepLR
-from .models import ModelBiLSTM
+from .models import ModelBiLSTM, modelMTM
 from .dataloader import SignalFeaData2
 from .dataloader import clear_linecache
 
@@ -22,7 +22,6 @@ from .utils.process_utils import count_line_num
 from .utils.process_utils import concat_two_files
 
 from .utils.process_utils import select_negsamples_asposkmer
-from .utils.process_utils import get_model_type_str
 
 
 def train_1time(train_file, valid_file, valid_lidxs, args):
@@ -43,7 +42,7 @@ def train_1time(train_file, valid_file, valid_lidxs, args):
     model = ModelBiLSTM(args.seq_len, args.signal_len, args.layernum1, args.layernum2, args.class_num,
                         args.dropout_rate, args.hid_rnn,
                         args.n_vocab, args.n_embed, str2bool(args.is_base), str2bool(args.is_signallen),
-                        args.model_type)
+                        "both_bilstm")
     if use_cuda:
         model = model.cuda()
 
@@ -63,7 +62,7 @@ def train_1time(train_file, valid_file, valid_lidxs, args):
     for epoch in range(args.epoch_num):
         test_accus = []
         for i, sfeatures in enumerate(train_loader):
-            _, kmer, base_means, base_stds, base_signal_lens, signals, labels = sfeatures
+            _, kmer, base_means, base_stds, base_signal_lens, signals, labels, _ = sfeatures
             if use_cuda:
                 kmer = kmer.cuda()
                 base_means = base_means.cuda()
@@ -121,7 +120,7 @@ def train_1time(train_file, valid_file, valid_lidxs, args):
     idx2aclogits = {}
     start = time.time()
     for vi, vsfeatures in enumerate(valid_loader):
-        _, vkmer, vbase_means, vbase_stds, vbase_signal_lens, vsignals, vlabels = vsfeatures
+        _, vkmer, vbase_means, vbase_stds, vbase_signal_lens, vsignals, vlabels, _ = vsfeatures
         if use_cuda:
             vkmer = vkmer.cuda()
             vbase_means = vbase_means.cuda()
@@ -170,6 +169,144 @@ def train_1time(train_file, valid_file, valid_lidxs, args):
     return idx2aclogits
 
 
+def train_1time_mtm(train_file, valid_file, valid_lidxs, args):
+    """
+    Train one round of MTM-based denoise, then score valid_file.
+    Uses d_static=0 (no proximity tag) — tag feature is unreliable for plant CHH/CHG
+    and denoise only needs to distinguish clean signal-level positives from negatives.
+    Returns idx2aclogits: {line_idx -> prob_of_positive}.
+    """
+    device = torch.device("cuda" if use_cuda else "cpu")
+
+    train_dataset = SignalFeaData2(train_file)
+    train_loader  = torch.utils.data.DataLoader(
+        dataset=train_dataset, batch_size=args.batch_size, shuffle=True,
+    )
+
+    model = modelMTM(
+        num_chn=args.mtm_num_base_features + args.n_embed,
+        d_static=0,
+        num_cls=args.class_num,
+        ratios=args.mtm_ratios,
+        d_model=args.mtm_hid_rnn,
+        r_hid=args.mtm_r_hid,
+        drop=args.dropout_rate,
+        norm_first=args.mtm_norm_first,
+        down_mode=args.mtm_down_mode,
+        vocab_size=args.n_vocab,
+        embedding_size=args.n_embed,
+        temporal_depth=args.mtm_temporal_depth,
+    )
+    model = model.to(device)
+
+    weight_rank = torch.tensor([1.0, args.pos_weight], dtype=torch.float, device=device)
+    criterion   = nn.CrossEntropyLoss(weight=weight_rank)
+    optimizer   = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler   = StepLR(optimizer, step_size=2, gamma=0.1)
+
+    def _forward(kmer, signals):
+        """Build MTM inputs from batched kmer/signals and run forward."""
+        B, L, S = signals.shape
+        signals_flat = signals.view(B, -1, 1).to(device)
+        kmer_expand  = kmer.long().unsqueeze(2).expand(-1, -1, S).reshape(B, -1).to(device)
+        x_static     = torch.zeros(B, 1, device=device, dtype=torch.long)  # d_static=0, unused
+        tpos         = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)
+        x_mask       = torch.isnan(signals_flat)
+        false_mask   = torch.zeros(*x_mask.shape[:-1], args.n_embed, device=device, dtype=torch.bool)
+        x_mask       = torch.cat([x_mask, false_mask], dim=-1)
+        return model(signals_flat, kmer_expand, x_mask, tpos, x_static)
+
+    total_step = len(train_loader)
+    print("train total_step: {}".format(total_step))
+    start = time.time()
+    model.train()
+    for epoch in range(args.epoch_num):
+        test_accus = []
+        for i, sfeatures in enumerate(train_loader):
+            _, kmer, _, _, _, signals, labels, _ = sfeatures
+            labels = labels.to(device)
+            logits = _forward(kmer, signals.float())
+            loss   = criterion(logits, labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
+
+            if (i + 1) % args.step_interval == 0:
+                with torch.no_grad():
+                    predicted = torch.argmax(logits, dim=1).cpu()
+                tlabels     = labels.cpu()
+                i_accuracy  = metrics.accuracy_score(tlabels.numpy(), predicted.numpy())
+                i_precision = metrics.precision_score(tlabels.numpy(), predicted.numpy(),
+                                                      zero_division=0)
+                i_recall    = metrics.recall_score(tlabels.numpy(), predicted.numpy(),
+                                                   zero_division=0)
+                test_accus.append(i_accuracy)
+                endtime = time.time()
+                print('Epoch [{}/{}], Step [{}/{}], TrainLoss: {:.4f}, '
+                      'Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, '
+                      'Time: {:.2f}s'
+                      .format(epoch + 1, args.epoch_num, i + 1, total_step, loss.item(),
+                              i_accuracy, i_precision, i_recall, endtime - start))
+                sys.stdout.flush()
+                start = time.time()
+        scheduler.step()
+        if len(test_accus) > 0 and np.mean(test_accus) >= 0.95:
+            break
+
+    # ── score valid set ──────────────────────────────────────────────────────
+    valid_dataset = SignalFeaData2(valid_file)
+    valid_loader  = torch.utils.data.DataLoader(
+        dataset=valid_dataset, batch_size=args.batch_size, shuffle=False,
+    )
+    total_step = len(valid_loader)
+    print("valid total_step: {}".format(total_step))
+    model.eval()
+    vaccus, vprecs, vrecas = [], [], []
+    lineidx_cnt  = 0
+    idx2aclogits = {}
+    start = time.time()
+    with torch.no_grad():
+        for vi, vsfeatures in enumerate(valid_loader):
+            _, vkmer, _, _, _, vsignals, vlabels, _ = vsfeatures
+            vlabels_dev = vlabels.to(device)
+            vlogits  = _forward(vkmer, vsignals.float())
+            vloss    = criterion(vlogits, vlabels_dev)
+            vprobs   = torch.softmax(vlogits, dim=-1).cpu()
+            vpredicted = torch.argmax(vprobs, dim=1)
+            vlabels_np = vlabels.numpy()
+
+            for prob_row in vprobs.numpy():
+                idx2aclogits[valid_lidxs[lineidx_cnt]] = prob_row[1]
+                lineidx_cnt += 1
+
+            i_accuracy  = metrics.accuracy_score(vlabels_np, vpredicted.numpy())
+            i_precision = metrics.precision_score(vlabels_np, vpredicted.numpy(),
+                                                  zero_division=0)
+            i_recall    = metrics.recall_score(vlabels_np, vpredicted.numpy(),
+                                               zero_division=0)
+            vaccus.append(i_accuracy)
+            vprecs.append(i_precision)
+            vrecas.append(i_recall)
+
+            if (vi + 1) % args.step_interval == 0 or (vi + 1) == total_step:
+                endtime = time.time()
+                print('===Test, Step [{}/{}], ValidLoss: {:.4f}, '
+                      'Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, '
+                      'Time: {:.2f}s'
+                      .format(vi + 1, total_step, vloss.item(),
+                              i_accuracy, i_precision, i_recall, endtime - start))
+                sys.stdout.flush()
+                start = time.time()
+
+    print("===Test, Total Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}".format(
+        np.mean(vaccus), np.mean(vprecs), np.mean(vrecas)))
+    del model
+    clear_linecache()
+    return idx2aclogits
+
+
 def train_rounds(train_file, iterstr, args, modeltype_str):
     """
     repeat rounds of splitting train_file to train_then_valid
@@ -198,9 +335,15 @@ def train_rounds(train_file, iterstr, args, modeltype_str):
         lidxs1, lidxs2 = random_select_file_rows_s(train_file, train_file1, train_file2,
                                                    half_num, False)
         print("##########Train Cross Rank, Iter {}, Round {}, part1##########".format(iterstr, i + 1))
-        idxs22logits = train_1time(train_file1, train_file2, lidxs2, args)
+        if getattr(args, "model_class", "bilstm") == "mtm":
+            idxs22logits = train_1time_mtm(train_file1, train_file2, lidxs2, args)
+        else:
+            idxs22logits = train_1time(train_file1, train_file2, lidxs2, args)
         print("##########Train Cross Rank, Iter {}, Round {}, part2##########".format(iterstr, i + 1))
-        idxs12logits = train_1time(train_file2, train_file1, lidxs1, args)
+        if getattr(args, "model_class", "bilstm") == "mtm":
+            idxs12logits = train_1time_mtm(train_file2, train_file1, lidxs1, args)
+        else:
+            idxs12logits = train_1time(train_file2, train_file1, lidxs1, args)
         for idx in idxs22logits.keys():
             idxs2logtis_all[idx].append(idxs22logits[idx])
         for idx in idxs12logits.keys():
@@ -321,7 +464,7 @@ def denoise(args):
     iterations = args.iterations
 
     train_file = args.train_file
-    modeltype_str = get_model_type_str(args.model_type, str2bool(args.is_base), str2bool(args.is_signallen))
+    modeltype_str = args.model_class
 
     # filter neg samples ===
     train_neg_file = _get_all_negative_samples(train_file, modeltype_str)
@@ -403,12 +546,13 @@ def main():
     parser.add_argument('--is_filter_fn', type=str, default="no", required=False,
                         help="is filter false negative samples, 'yes' or 'no', default no")
 
+    # model selection
+    parser.add_argument('--model_class', type=str, default="bilstm",
+                        choices=["bilstm", "mtm"], required=False,
+                        help="which model to use for denoise: 'bilstm' (default) or 'mtm'. "
+                             "Use 'mtm' to run a second denoise pass on LSTM-denoised data.")
+
     # model input
-    parser.add_argument('--model_type', type=str, default="signal_bilstm",
-                        choices=["both_bilstm", "seq_bilstm", "signal_bilstm"],
-                        required=False,
-                        help="type of model to use, 'both_bilstm', 'seq_bilstm' or 'signal_bilstm', "
-                             "'both_bilstm' means to use both seq and signal bilstm, default: signal_bilstm")
     parser.add_argument('--seq_len', type=int, default=13, required=False,
                         help="len of kmer. default 13")
     parser.add_argument('--signal_len', type=int, default=16, required=False,
@@ -452,6 +596,23 @@ def main():
                         help="kept ratio of samples, to end denoise process. default 0.99")
     parser.add_argument("--fst_iter_prob", action="store_true", default=False,
                         help="if output probs of samples after 1st iteration")
+
+    # MTM-specific hyper-params (only used when --model_class mtm)
+    parser.add_argument('--mtm_num_base_features', type=int, default=1, required=False,
+                        help="MTM: raw signal features per base, default 1")
+    parser.add_argument('--mtm_hid_rnn', type=int, default=128, required=False,
+                        help="MTM: d_model hidden size, default 128")
+    parser.add_argument('--mtm_ratios', type=int, nargs='+', default=[2, 2, 2, 2], required=False,
+                        help="MTM: downsampling ratios, default [2,2,2,2]")
+    parser.add_argument('--mtm_r_hid', type=int, default=4, required=False,
+                        help="MTM: MLP hidden ratio in TokenMixingLayer, default 4")
+    parser.add_argument('--mtm_norm_first', type=str2bool, default=True, required=False,
+                        help="MTM: pre-norm (True) or post-norm (False), default True")
+    parser.add_argument('--mtm_down_mode', type=str, default="concat",
+                        choices=["concat", "avg", "max"], required=False,
+                        help="MTM: downsampling mode, default concat")
+    parser.add_argument('--mtm_temporal_depth', type=int, default=2, required=False,
+                        help="MTM: temporal attention layers per TokenMixingLayer, default 2")
 
     args = parser.parse_args()
 
