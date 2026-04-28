@@ -356,6 +356,7 @@ class modelMTM(nn.Module):
         self.chn_emb = nn.Embedding(num_chn, d_model)
         nn.init.xavier_uniform_(self.chn_emb.weight)
         self.cls_tok = nn.Parameter(torch.rand(num_chn, d_model))
+        self.register_buffer('_c_arange', torch.arange(num_chn))
 
         # 传入 temporal_depth
         self.inp_layer = TokenMixingLayer(d_model, r_hid, drop, norm_first, temporal_depth)
@@ -377,8 +378,8 @@ class modelMTM(nn.Module):
         dev = x.device
         idx_t = repeat(t, "b t -> b t c", c=nc)
         idx_b = repeat(torch.arange(bsz, device=dev), "b -> b t c", t=nt, c=nc)
-        idx_c = repeat(torch.arange(nc, device=dev), "c -> b t c", b=bsz, t=nt)
-        c_feat = self.chn_emb(torch.arange(nc, device=dev))
+        idx_c = repeat(self._c_arange, "c -> b t c", b=bsz, t=nt)
+        c_feat = self.chn_emb(self._c_arange)
 
         x = apply_abs_pe(x.nan_to_num(0)[..., None] * c_feat, idx_t, self.ape)
         cls_tok = repeat(self.cls_tok, "c d -> b 1 c d", b=bsz)

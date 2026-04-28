@@ -120,20 +120,18 @@ def load_model_bilstm(args, device):
 def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
     """
     Run one forward pass for modelMTM.
-    Input tensors come from process_data_fast():
+    Input arrays come from process_data_fast():
         batch_k : list of np.int64   (seq_len,)
         batch_s : list of np.float32 (seq_len, signal_len)
         batch_t : list of int        (proximity tag)
     """
-    kmers   = torch.stack(batch_k)          # (B, L)
-    signals = torch.stack(batch_s)          # (B, L, S)
-    tags    = torch.tensor(batch_t, dtype=torch.long)
+    k_np = np.stack(batch_k)               # (B, L)   – one allocation
+    s_np = np.stack(batch_s)               # (B, L, S)
+    B, L, S = s_np.shape
 
-    B, L, S = signals.shape
-
-    signals = signals.view(B, -1, 1).to(device, non_blocking=True)   # (B, L*S, 1)
-    kmers   = kmers.to(device, non_blocking=True)
-    tags    = tags.to(device, non_blocking=True)
+    kmers   = torch.from_numpy(k_np).to(device, non_blocking=True)
+    signals = torch.from_numpy(s_np.reshape(B, L * S, 1)).to(device, non_blocking=True)
+    tags    = torch.tensor(batch_t, dtype=torch.long, device=device)
 
     # expand kmer codes to match signal time axis
     kmer_expand = kmers.unsqueeze(2).expand(-1, -1, S).reshape(B, -1)  # (B, L*S)
@@ -283,8 +281,8 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
                 # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
                 # label (sub[3]) discarded – not needed for inference
                 batch_info.append(sub[0])
-                batch_k.append(torch.from_numpy(np.asarray(sub[1], dtype=np.int64)))
-                batch_s.append(torch.from_numpy(np.asarray(sub[2], dtype=np.float32)))
+                batch_k.append(np.asarray(sub[1], dtype=np.int64))
+                batch_s.append(np.asarray(sub[2], dtype=np.float32))
                 batch_t.append(sub[4])
             else:
                 # sub = (sampleinfo, k_seq, means, stds, lens, k_signals_rect, label)

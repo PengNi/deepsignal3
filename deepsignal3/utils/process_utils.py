@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 import bisect
 import fnmatch
+import functools
 import os
 import random
 import multiprocessing
@@ -231,10 +232,8 @@ def normalize_signals(signals, normalize_method="mad"):
     else:
         raise ValueError("")
     if sscale == 0.0:
-        norm_signals = signals
-    else:
-        norm_signals = (signals - sshift) / sscale
-    return np.around(norm_signals, decimals=6)
+        return signals.astype(np.float32)
+    return ((signals - sshift) / sscale).astype(np.float32)
 
 
 def fill_files_queue(files_q, files, batch_size=1, is_single=False):
@@ -283,22 +282,15 @@ def compute_proximity_tag(loc: int, tag_locs: List[int], window: int = 10) -> in
     return 0
 
 
-def get_refloc_of_methysite_in_motif(seqstr, motifset, methyloc_in_motif=0):
-    """
+@functools.lru_cache(maxsize=64)
+def _compile_motif_pattern(motifset_frozen):
+    alts = '|'.join(re.escape(m) for m in sorted(motifset_frozen))
+    return re.compile(f'(?=({alts}))')
 
-    :param seqstr:
-    :param motifset:
-    :param methyloc_in_motif: 0-based
-    :return:
-    """
-    motifset = set(motifset)
-    strlen = len(seqstr)
-    motiflen = len(list(motifset)[0])
-    sites = []
-    for i in range(0, strlen - motiflen + 1):
-        if seqstr[i : i + motiflen] in motifset:
-            sites.append(i + methyloc_in_motif)
-    return sites
+
+def get_refloc_of_methysite_in_motif(seqstr, motifset, methyloc_in_motif=0):
+    pattern = _compile_motif_pattern(frozenset(motifset))
+    return [m.start() + methyloc_in_motif for m in pattern.finditer(seqstr)]
 
 
 def _convert_motif_seq(ori_seq, is_dna=True):
