@@ -239,6 +239,12 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
         model = load_model_bilstm(args, device)
     model.eval()
 
+    # ── per-worker timing (set DEEPSIGNAL_PROFILE=1 to enable) ────────────
+    import os, time as _time
+    _profile = os.environ.get("DEEPSIGNAL_PROFILE") == "1"
+    _t_assemble = _t_infer = _t_queue_get = 0.0
+    _n_batches = 0
+
     # ── batch buffers ──────────────────────────────
     batch_info = []
     batch_k, batch_s = [], []
@@ -247,8 +253,11 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     end_count = 0
 
     def flush():
+        nonlocal _t_assemble, _t_infer, _n_batches
         if not batch_info:
             return
+        if _profile:
+            _t0 = _time.perf_counter()
         if is_mtm:
             lines = _run_batch_mtm(
                 batch_info, batch_k, batch_s, batch_t,
@@ -259,6 +268,21 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
                 batch_info, batch_k, batch_means, batch_stds,
                 batch_lens, batch_s, device, model,
             )
+        if _profile:
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            _t_infer += _time.perf_counter() - _t0
+            _n_batches += 1
+            if _n_batches % 20 == 0:
+                b = len(batch_info)
+                print(
+                    f"[Worker-{rank}({device})] {_n_batches} batches | "
+                    f"assemble {_t_assemble*1e3/20:.2f} ms/b | "
+                    f"infer {_t_infer*1e3/20:.2f} ms/b | "
+                    f"last_batch_size {b}",
+                    flush=True,
+                )
+                _t_assemble = _t_infer = 0.0
         if lines:
             pred_q.put(lines)
         batch_info.clear(); batch_k.clear(); batch_s.clear(); batch_t.clear()
@@ -266,7 +290,11 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
 
     # ── main loop ──────────────────────────────────
     while True:
+        if _profile:
+            _t0 = _time.perf_counter()
         item = queue.get()
+        if _profile:
+            _t_queue_get += _time.perf_counter() - _t0
 
         if item is None:
             end_count += 1
@@ -276,6 +304,8 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
 
         items = item if isinstance(item, list) else [item]
 
+        if _profile:
+            _t0 = _time.perf_counter()
         for sub in items:
             if is_mtm:
                 # sub = (sampleinfo, k_seq, k_signals_rect, label, tag)
@@ -295,10 +325,21 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
                 batch_s.append(torch.from_numpy(np.asarray(sub[5], dtype=np.float32)))
 
             if len(batch_info) >= args.batch_size:
+                if _profile:
+                    _t_assemble += _time.perf_counter() - _t0
                 flush()
+                if _profile:
+                    _t0 = _time.perf_counter()
+        if _profile:
+            _t_assemble += _time.perf_counter() - _t0
 
     # flush tail batch
     flush()
+    if _profile:
+        print(
+            f"[Worker-{rank}({device})] total queue_wait {_t_queue_get*1e3:.0f} ms",
+            flush=True,
+        )
     print(f"[Worker-{rank}({device})] done", flush=True)
 
 

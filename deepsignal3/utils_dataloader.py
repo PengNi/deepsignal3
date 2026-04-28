@@ -406,20 +406,46 @@ def producer(worker_id, files, queues, args, motif_seqs, positions,
     BUF_SIZE = 128
     buffers  = [[] for _ in range(num_workers)]
 
+    # ── per-producer timing (set DEEPSIGNAL_PROFILE=1 to enable) ──────────
+    import os, time as _time
+    _profile = os.environ.get("DEEPSIGNAL_PROFILE") == "1"
+    _t_norm = _t_proc = _t_bam = 0.0
+    _n_reads = 0
+
     def _flush_buffer(qid):
         if buffers[qid]:
             queues[qid].put(buffers[qid])
             buffers[qid] = []
 
     def _handle_read(signal, read_name):
+        nonlocal _t_norm, _t_proc, _t_bam, _n_reads
         try:
-            for seq_read in bam_index.get_alignments(read_name):
+            if _profile:
+                _t0 = _time.perf_counter()
+            aligns = list(bam_index.get_alignments(read_name))
+            if _profile:
+                _t_bam += _time.perf_counter() - _t0
+            for seq_read in aligns:
+                if _profile:
+                    _t0 = _time.perf_counter()
                 feats = process_fn(signal, seq_read, motif_seqs, positions, args)
+                if _profile:
+                    _t_proc += _time.perf_counter() - _t0
                 for f in feats:
                     qid = random.randint(0, num_workers - 1)
                     buffers[qid].append(f)
                     if len(buffers[qid]) >= BUF_SIZE:
                         _flush_buffer(qid)
+            if _profile:
+                _n_reads += 1
+                if _n_reads % 500 == 0:
+                    print(
+                        f"[Producer-{worker_id}] {_n_reads} reads | "
+                        f"bam_lookup {_t_bam*1e3/500:.2f} ms/r | "
+                        f"process_fn {_t_proc*1e3/500:.2f} ms/r",
+                        flush=True,
+                    )
+                    _t_norm = _t_proc = _t_bam = 0.0
         except KeyError:
             pass  # read not in BAM – skip silently
 

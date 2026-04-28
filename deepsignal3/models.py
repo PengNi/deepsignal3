@@ -356,7 +356,7 @@ class modelMTM(nn.Module):
         self.chn_emb = nn.Embedding(num_chn, d_model)
         nn.init.xavier_uniform_(self.chn_emb.weight)
         self.cls_tok = nn.Parameter(torch.rand(num_chn, d_model))
-        self.register_buffer('_c_arange', torch.arange(num_chn))
+        self.register_buffer('_c_arange', torch.arange(num_chn), persistent=False)
 
         # 传入 temporal_depth
         self.inp_layer = TokenMixingLayer(d_model, r_hid, drop, norm_first, temporal_depth)
