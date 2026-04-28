@@ -14,6 +14,7 @@ Active components:
 
 import random
 import numpy as np
+from numba import jit
 
 import pod5
 import pyslow5
@@ -32,6 +33,31 @@ LOGGER = get_logger(__name__)
 # Signal ↔ base alignment utilities
 # ─────────────────────────────────────────────────────────────────────────────
 
+@jit(nopython=True, cache=True)
+def _q2tloc_jit(cigar_ops, cigar_lens, seq_len, forward):
+    q_to_r_poss = np.full(seq_len + 1, np.int32(-2), dtype=np.int32)
+    curr_r_pos = np.int32(0)
+    curr_q_pos = np.int32(0)
+    n = len(cigar_ops)
+    for ii in range(n):
+        i = ii if forward else (n - 1 - ii)
+        op     = cigar_ops[i]
+        op_len = cigar_lens[i]
+        if op == 1:                         # insertion
+            for q_pos in range(curr_q_pos, curr_q_pos + op_len):
+                q_to_r_poss[q_pos] = np.int32(-1)
+            curr_q_pos += op_len
+        elif op == 2 or op == 3:            # deletion / skip
+            curr_r_pos += op_len
+        elif op == 0 or op == 7 or op == 8: # match / seq-match / seq-mismatch
+            for off in range(op_len):
+                q_to_r_poss[curr_q_pos + off] = curr_r_pos + off
+            curr_q_pos += op_len
+            curr_r_pos += op_len
+    q_to_r_poss[curr_q_pos] = curr_r_pos
+    return q_to_r_poss
+
+
 def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
     """
     Map query positions to reference positions via CIGAR.
@@ -39,27 +65,12 @@ def get_q2tloc_from_cigar(r_cigar_tuple, strand, seq_len):
       -1  → insertion into ref
       -2  → deletion / invalid
     """
-    fill_invalid = -2
-    q_to_r_poss = np.full(seq_len + 1, fill_invalid, dtype=np.int32)
-    curr_r_pos, curr_q_pos = 0, 0
-    cigar_ops = r_cigar_tuple if strand == 1 else r_cigar_tuple[::-1]
-    for op, op_len in cigar_ops:
-        if op == 1:                          # insertion
-            for q_pos in range(curr_q_pos, curr_q_pos + op_len):
-                q_to_r_poss[q_pos] = -1
-            curr_q_pos += op_len
-        elif op in (2, 3):                   # deletion / skip
-            curr_r_pos += op_len
-        elif op in (0, 7, 8):               # match / seq-match / seq-mismatch
-            for off in range(op_len):
-                q_to_r_poss[curr_q_pos + off] = curr_r_pos + off
-            curr_q_pos += op_len
-            curr_r_pos += op_len
-        # op == 6 (padding) – ignore
-    q_to_r_poss[curr_q_pos] = curr_r_pos
-    if q_to_r_poss[-1] == fill_invalid:
+    ops  = np.array([op  for op, _  in r_cigar_tuple], dtype=np.int32)
+    lens = np.array([ln  for _,  ln in r_cigar_tuple], dtype=np.int32)
+    q_to_r_poss = _q2tloc_jit(ops, lens, seq_len, strand == 1)
+    if q_to_r_poss[-1] == -2:
         raise ValueError(
-            f"Invalid CIGAR: ref_len={seq_len}, cigar implied {curr_r_pos}"
+            f"Invalid CIGAR: ref_len={seq_len}, cigar did not cover full query"
         )
     return q_to_r_poss
 
@@ -89,32 +100,50 @@ def _group_signals_by_movetable_v2(trimed_signals, movetable, stride):
 
 
 
+@jit(nopython=True, cache=True)
+def _build_signal_rect_jit(sig, starts, ends, signals_len):
+    """JIT kernel: fills rect with 0.0 and marks valid positions in a bool mask."""
+    N   = len(starts)
+    out   = np.zeros((N, signals_len), dtype=np.float32)
+    valid = np.ones((N, signals_len),  dtype=np.bool_)
+    for i in range(N):
+        s = starts[i]
+        e = ends[i]
+        L = e - s
+        if L == 0:
+            for j in range(signals_len):
+                valid[i, j] = False
+            continue
+        if L <= signals_len:
+            pad_left = (signals_len - L) // 2
+            for j in range(pad_left):
+                valid[i, j] = False
+            for j in range(L):
+                out[i, pad_left + j] = sig[s + j]
+            for j in range(pad_left + L, signals_len):
+                valid[i, j] = False
+        else:
+            # downsample: evenly-spaced indices across [s, e)
+            for j in range(signals_len):
+                idx = s + int(j * (L - 1) / (signals_len - 1))
+                out[i, j] = sig[idx]
+    return out, valid
+
+
 def build_signal_rect_from_movetable(trimed_signals, movetable, stride, signals_len=16):
     """
-    Vectorised: build (num_events, signals_len) rect array from move table.
+    Build (num_events, signals_len) rect array from move table.
     NaN-padded for short events; downsampled for long events.
     Used by process_data_fast (MTM) and process_data_bilstm (BiLSTM).
     """
     move_idx = np.flatnonzero(movetable == 1)
     move_idx = np.append(move_idx, len(movetable))
+    starts = (move_idx[:-1] * stride).astype(np.int64)
+    ends   = (move_idx[1:]  * stride).astype(np.int64)
 
-    starts = move_idx[:-1] * stride
-    ends   = move_idx[1:]  * stride
-    N      = len(starts)
-
-    out = np.full((N, signals_len), np.nan, dtype=np.float32)
-    for i in range(N):
-        s, e = starts[i], ends[i]
-        sig = trimed_signals[s:e]
-        L   = e - s
-        if L == 0:
-            continue
-        if L <= signals_len:
-            pad_left = (signals_len - L) // 2
-            out[i, pad_left: pad_left + L] = sig
-        else:
-            idx = np.linspace(0, L - 1, signals_len).astype(np.int32)
-            out[i] = sig[idx]
+    sig = np.ascontiguousarray(trimed_signals, dtype=np.float32)
+    out, valid = _build_signal_rect_jit(sig, starts, ends, signals_len)
+    out[~valid] = np.nan   # restore NaN padding for MTM mask (torch.isnan)
     return out
 
 

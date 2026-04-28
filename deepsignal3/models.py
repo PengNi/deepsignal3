@@ -165,7 +165,8 @@ class ModelBiLSTM(nn.Module):
         self.is_base = is_base
         self.is_signallen = is_signallen
         self.is_trace = is_trace
-        self.sigfea_num = 3 if self.is_signallen else 2
+        # forward always uses kmer_embed + base_means + base_stds + base_signal_lens (3 scalar feats)
+        self.sigfea_num = 3
 
         self.lstm_seq = nn.LSTM(
             embedding_size + self.sigfea_num,

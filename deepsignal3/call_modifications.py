@@ -229,6 +229,9 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     if device.type == "cuda":
         torch.cuda.set_device(device.index)
         torch.backends.cudnn.benchmark = True
+    else:
+        # Avoid CPU thread contention with multiprocessing workers
+        torch.set_num_threads(1)
 
     is_mtm = (args.model_class == "mtm")
 
