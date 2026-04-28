@@ -26,8 +26,6 @@ from .utils.process_utils import (
     get_motif_seqs, get_files, read_position_file,
     detect_file_type, get_logger,
 )
-from .utils_dataloader import producer
-
 LOGGER = get_logger(__name__)
 os.environ["MKL_THREADING_LAYER"] = "GNU"
 
@@ -472,6 +470,7 @@ def inference_ultra(args):
         _nproc_io_actual = 1  # single TSV reader
 
     else:
+        from .utils_dataloader import producer
         file_type = detect_file_type(input_path, True)
         files = get_files(input_path, True, file_type)
         LOGGER.info(f"Signal input: {len(files)} {file_type} files, "
