@@ -941,12 +941,150 @@ def train_worker_aggregate(local_rank, global_world_size, args):
     clear_linecache()
     cleanup()
 
+
+def train_aggregate_cpu(args):
+    """aggregate 模型的单进程 CPU 训练（无 GPU 环境下自动使用）"""
+    device = torch.device('cpu')
+    sys.stderr.write(f"[aggregate-cpu] No GPU detected, training on CPU.\n")
+
+    model_dir = os.path.abspath(args.model_dir).rstrip("/")
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    else:
+        model_regex = re.compile(r"aggregate\.(attbigru|transformer)\.b\d+_epoch\d+\.ckpt*")
+        for mfile in os.listdir(model_dir):
+            if model_regex.match(mfile):
+                os.remove(os.path.join(model_dir, mfile))
+    model_dir += "/"
+
+    model = AggrAttRNN(
+        seq_len=11, num_layers=1, num_classes=1, dropout_rate=args.dropout_rate,
+        hidden_size=args.aggregate_hidden, binsize=20,
+        model_type='attbigru', device='cpu'
+    )
+
+    if args.init_model is not None:
+        sys.stderr.write(f"[aggregate-cpu] loading pre-trained model: {args.init_model}\n")
+        para_dict = torch.load(args.init_model, map_location='cpu')
+        model_dict = model.state_dict()
+        model_dict.update({k: v for k, v in para_dict.items() if k in model_dict})
+        model.load_state_dict(model_dict)
+
+    model.to(device)
+
+    sys.stderr.write(f"[aggregate-cpu] reading aggregate data..\n")
+    train_dataset = AggregateDataset(args.train_file)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.dl_num_workers, pin_memory=False
+    )
+    valid_dataset = AggregateDataset(args.valid_file)
+    valid_loader = torch.utils.data.DataLoader(
+        valid_dataset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.dl_num_workers, pin_memory=False
+    )
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+
+    if args.lr_scheduler == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
+                                      patience=args.lr_patience, verbose=True)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
+
+    total_step = len(train_loader)
+    sys.stderr.write(f"[aggregate-cpu] total_step: {total_step}\n")
+
+    curr_lowest_loss = float('inf')
+    curr_best_epoch = 0
+    no_improve_count = 0
+    patience = args.patience
+
+    model.train()
+    for epoch in range(args.max_epoch_num):
+        tlosses = []
+        start = time.time()
+
+        for i, (pos, hist, label) in enumerate(train_loader):
+            pos, hist, label = pos.to(device), hist.to(device), label.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(pos.unsqueeze(-1), hist).squeeze(-1)
+            loss = criterion(outputs, label)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            tlosses.append(loss.item())
+
+            if (i + 1) % args.step_interval == 0 or (i + 1) == total_step:
+                sys.stderr.write(
+                    f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}], Step [{i+1}/{total_step}]; "
+                    f"TrainLoss: {np.mean(tlosses):.6f}; Time: {time.time()-start:.2f}s\n"
+                )
+                start = time.time()
+                tlosses = []
+
+        model.eval()
+        with torch.no_grad():
+            vlosses, val_preds, val_labels = [], [], []
+            for pos, hist, label in valid_loader:
+                pos, hist, label = pos.to(device), hist.to(device), label.to(device)
+                outputs = model(pos.unsqueeze(-1), hist).squeeze(-1)
+                vlosses.append(criterion(outputs, label).item())
+                val_preds.append(torch.sigmoid(outputs).numpy())
+                val_labels.append(label.numpy())
+
+        v_meanloss = np.mean(vlosses)
+        val_preds = np.concatenate(val_preds)
+        val_labels = np.concatenate(val_labels)
+        pcc, _ = pearsonr(val_preds, val_labels)
+        scc, _ = spearmanr(val_preds, val_labels)
+        mae = np.mean(np.abs(val_preds - val_labels))
+
+        clean_state = {k.replace("_orig_mod.", ""): v for k, v in model.state_dict().items()}
+        save_path = model_dir + f"aggregate.{args.aggregate_model_type}.b11_epoch{epoch+1}.ckpt"
+        torch.save(clean_state, save_path)
+
+        if v_meanloss < curr_lowest_loss:
+            curr_lowest_loss = v_meanloss
+            no_improve_count = 0
+            curr_best_epoch = epoch + 1
+            torch.save(clean_state, model_dir + "aggregate.best.ckpt")
+        else:
+            no_improve_count += 1
+
+        sys.stderr.write(
+            f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
+            f"ValidLoss: {v_meanloss:.6f} | PCC: {pcc:.4f} | SCC: {scc:.4f} | MAE: {mae:.4f}\n"
+            f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
+        )
+
+        model.train()
+
+        if no_improve_count >= patience and epoch >= args.min_epoch_num - 1:
+            sys.stderr.write(f"[aggregate-cpu] Early stop at epoch {epoch+1}\n")
+            break
+
+        if args.lr_scheduler == "ReduceLROnPlateau":
+            scheduler.step(v_meanloss)
+        else:
+            scheduler.step()
+
+    sys.stderr.write(f"✅ Best aggregate model at epoch {curr_best_epoch} (ValLoss: {curr_lowest_loss:.6f})\n")
+    clear_linecache()
+
+
 def train_multigpu(args):
     total_start = time.time()
     torch.manual_seed(args.tseed)
 
     if use_cuda:
         torch.cuda.manual_seed(args.tseed)
+
+    if args.model_class == "aggregate" and not use_cuda:
+        train_aggregate_cpu(args)
+        return
 
     if use_cuda:
         print("GPU is available!")
