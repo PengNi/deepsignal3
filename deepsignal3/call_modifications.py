@@ -145,7 +145,7 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
     tpos     = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)  # (B, L*S)
     x_static = tags.unsqueeze(-1)                                              # (B, 1)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         logits = model(signals, kmer_expand, x_mask, tpos, x_static)
         probs  = torch.softmax(logits, dim=-1)
         pred   = torch.argmax(logits, dim=1)
@@ -188,7 +188,7 @@ def _run_batch_bilstm(batch_info, batch_k, batch_means, batch_stds,
     lens    = torch.stack(batch_lens).to(device, non_blocking=True)   # (B, L)
     signals = torch.stack(batch_s).to(device, non_blocking=True)      # (B, L, S)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         # ModelBiLSTM.forward returns (logits, softmax_probs)
         _, probs = model(kmers.long(), means, stds, lens, signals)
         pred = torch.argmax(probs, dim=1)
@@ -227,6 +227,7 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
     if device.type == "cuda":
         torch.cuda.set_device(device.index)
         torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")  # TF32 on Ampere+, free speedup
     else:
         # Avoid CPU thread contention with multiprocessing workers
         torch.set_num_threads(1)
