@@ -196,7 +196,7 @@ def train_worker(local_rank, global_world_size, args):
         scheduler = StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay)
     elif args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
-                                      patience=args.lr_patience, verbose=True)
+                                      patience=args.lr_patience)
     else:
         raise ValueError("--lr_scheduler is not right!")
     
@@ -498,7 +498,7 @@ def train_worker_mtm(local_rank, global_world_size, args):
         scheduler = StepLR(optimizer, step_size=args.lr_decay_step, gamma=args.lr_decay)
     elif args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
-                                      patience=args.lr_patience, verbose=True)
+                                      patience=args.lr_patience)
     elif args.lr_scheduler == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
     else:
@@ -814,7 +814,7 @@ def train_worker_aggregate(local_rank, global_world_size, args):
 
     if args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
-                                      patience=args.lr_patience, verbose=True)
+                                      patience=args.lr_patience)
     else:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
 
@@ -989,7 +989,7 @@ def train_aggregate_cpu(args):
 
     if args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
-                                      patience=args.lr_patience, verbose=True)
+                                      patience=args.lr_patience)
     else:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
 
