@@ -362,6 +362,7 @@ def tsv_producer(tsv_file, queues, args):
     n_workers = len(queues)
     BUF_SIZE = 128
     buffers = [[] for _ in range(n_workers)]
+    chrom_filter = getattr(args, "chrom", None)
 
     open_fn = gzip.open if tsv_file.endswith(".gz") else open
     with open_fn(tsv_file, "rt") as fh:
@@ -371,6 +372,9 @@ def tsv_producer(tsv_file, queues, args):
                 continue
             words = line.split("\t")
             if len(words) < 12:
+                continue
+
+            if chrom_filter and words[0] != chrom_filter:
                 continue
 
             sampleinfo = "\t".join(words[:6])
@@ -610,6 +614,9 @@ def main():
                         help="Plant mode: proximity tag counts any C within "
                              "±10 bp (motif-agnostic). Default (human mode): "
                              "only same-motif sites are counted.")
+    p_ext.add_argument("--chrom",            type=str, default=None,
+                        help="Only process reads mapped to this chromosome/contig "
+                             "(e.g. chr1). Default: process all chromosomes.")
 
     # ── Performance ────────────────────────────────
     p_perf = parser.add_argument_group("PERFORMANCE")

@@ -424,6 +424,15 @@ def main():
         "need to be set. --positions is used to narrow down the range of the trageted "
         "motif locs. default None",
     )
+    sc_f5.add_argument(
+        "--chrom",
+        action="store",
+        type=str,
+        required=False,
+        default=None,
+        help="only process reads mapped to this chromosome/contig (e.g. chr1). "
+        "default None (process all chromosomes)",
+    )
 
     sc_f5.add_argument(
         "--trace",

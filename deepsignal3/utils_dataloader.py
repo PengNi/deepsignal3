@@ -250,6 +250,10 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
 
+    chrom_filter = getattr(args, "chrom", None)
+    if chrom_filter and ref_name != chrom_filter:
+        return []
+
     # Pre-compute tag_locs once per read
     plant = getattr(args, "plant", False)
     if plant:
@@ -330,6 +334,10 @@ def process_data_bilstm(signal, seq_read, motif_seqs, positions, args):
 
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
+
+    chrom_filter = getattr(args, "chrom", None)
+    if chrom_filter and ref_name != chrom_filter:
+        return []
 
     # Pre-compute tag_locs once per read (BiLSTM currently doesn't use tag,
     # but keeping the logic symmetric for future use)
