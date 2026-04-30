@@ -1265,8 +1265,8 @@ def main():
     st_agg.add_argument('--aggregate_model_type', type=str, default="attbigru",
                         choices=["attbigru", "transformer"], required=False,
                         help="aggregate model architecture, default attbigru")
-    st_agg.add_argument('--aggregate_hidden', type=int, default=256, required=False,
-                        help="hidden size for aggregate model, default 256")
+    st_agg.add_argument('--aggregate_hidden', type=int, default=32, required=False,
+                        help="hidden size for aggregate model, default 32")
 
     st_trainingp = parser.add_argument_group("TRAINING PARALLEL")
     st_trainingp.add_argument("--nodes", default=1, type=int,

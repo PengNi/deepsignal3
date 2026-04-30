@@ -260,9 +260,10 @@ def call_mods_frequency_to_file(args):
         prob_cf  = getattr(args, 'prob_cf', 0.0)
         is_sort  = getattr(args, 'sort', False)
 
+        aggre_hidden = getattr(args, 'aggre_hidden', 32)
         print("loading aggregate model from {}..".format(aggre_model_path))
         model = AggrAttRNN(seq_len=11, num_layers=1, num_classes=1,
-                           dropout_rate=0, hidden_size=32,
+                           dropout_rate=0, hidden_size=aggre_hidden,
                            binsize=bin_size, model_type='attbigru', device='cpu')
         checkpoint = torch.load(aggre_model_path, map_location='cpu', weights_only=True)
         try:
@@ -331,6 +332,8 @@ def main():
                         help="minimum read coverage per site for aggregate mode, default 4")
     parser.add_argument("--bin_size", type=int, default=20,
                         help="histogram bin count for aggregate mode, default 20")
+    parser.add_argument("--aggre_hidden", type=int, default=32,
+                        help="hidden size of AggrAttRNN, must match the trained model, default 32")
 
     args = parser.parse_args()
     call_mods_frequency_to_file(args)

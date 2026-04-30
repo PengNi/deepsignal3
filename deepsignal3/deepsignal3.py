@@ -614,6 +614,14 @@ def main():
         required=False,
         help="histogram bin count for aggregate mode, default 20",
     )
+    scf_aggr.add_argument(
+        "--aggre_hidden",
+        action="store",
+        type=int,
+        default=32,
+        required=False,
+        help="hidden size of AggrAttRNN, must match the trained model, default 32",
+    )
 
     sub_call_freq.set_defaults(func=main_call_freq)
 
@@ -1306,8 +1314,8 @@ def main():
     stm_agg.add_argument('--aggregate_model_type', type=str, default="attbigru",
                          choices=["attbigru", "transformer"], required=False,
                          help="aggregate model architecture, default attbigru")
-    stm_agg.add_argument('--aggregate_hidden', type=int, default=256, required=False,
-                         help="hidden size for aggregate model, default 256")
+    stm_agg.add_argument('--aggregate_hidden', type=int, default=32, required=False,
+                         help="hidden size for aggregate model, default 32")
 
     stm_trainingp = sub_trainm.add_argument_group("TRAINING PARALLEL")
     stm_trainingp.add_argument("--nodes", default=1, type=int,
