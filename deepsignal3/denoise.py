@@ -498,7 +498,7 @@ def _get_all_negative_samples(train_file, modeltype_str):
     with open(train_neg_file, "w") as wf:
         with open(train_file, 'r') as rf:
             for line in rf:
-                if int(line.strip().split("\t")[-1]) == 0:
+                if int(line.strip().split("\t")[11]) == 0:
                     wf.write(line)
     return train_neg_file
 
