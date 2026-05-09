@@ -244,8 +244,11 @@ def _run_aggr_model(positions, histograms, anchor_positions, anchor_histograms,
     insert_idx = np.searchsorted(anchor_arr, all_pos_arr)  # (N,)
 
     # Detect which positions are themselves anchors so we skip self as neighbor
-    safe_idx = np.minimum(insert_idx, M - 1) if M > 0 else np.zeros(N, dtype=np.int64)
-    is_anchor = (insert_idx < M) & (anchor_arr[safe_idx] == all_pos_arr)
+    if M > 0:
+        safe_idx = np.minimum(insert_idx, M - 1)
+        is_anchor = (insert_idx < M) & (anchor_arr[safe_idx] == all_pos_arr)
+    else:
+        is_anchor = np.zeros(N, dtype=bool)
 
     # Left neighbors in padded array: indices [k, k+1, ..., k+pad_len-1]
     # Right neighbors: [k+pad_len, ...] for non-anchors, [k+pad_len+1, ...] for anchors
