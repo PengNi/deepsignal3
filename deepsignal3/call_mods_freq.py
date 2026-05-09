@@ -128,7 +128,11 @@ def _get_normalized_histo(probs, binsize=20):
 
 
 def _prepare_data(mods_files, prob_cf=0.0, cov_cf=4, bin_size=20):
-    """Read per-read calls from one or more TSV files, group by (chrom, pos)."""
+    """Read per-read calls from one or more TSV files, group by (chrom, pos).
+
+    Returns all positions for inference plus a separate anchor set (cov >= cov_cf)
+    used as window context so low-coverage sites never pollute their neighbors.
+    """
     from collections import defaultdict, Counter
     import numpy as np
 
@@ -161,54 +165,113 @@ def _prepare_data(mods_files, prob_cf=0.0, cov_cf=4, bin_size=20):
     result = {}
     for chrom, pos_dict in chrom_pos_data.items():
         positions, histograms, coverages, strands = [], [], [], []
+        anchor_positions, anchor_histograms = [], []
+
         for refpos in sorted(pos_dict.keys()):
             item = pos_dict[refpos]
             cov = len(item['probs'])
-            if cov < cov_cf:
-                continue
             hist = _get_normalized_histo(item['probs'], bin_size)
             if hist is None:
                 continue
+            strand = Counter(item['strands']).most_common(1)[0][0]
+
             positions.append(refpos)
             histograms.append(hist)
             coverages.append(cov)
-            strands.append(Counter(item['strands']).most_common(1)[0][0])
+            strands.append(strand)
+
+            if cov >= cov_cf:
+                anchor_positions.append(refpos)
+                anchor_histograms.append(hist)
+
         if positions:
             result[chrom] = {
                 'positions': positions,
                 'histograms': histograms,
                 'coverages': coverages,
                 'strands': strands,
+                'anchor_positions': anchor_positions,
+                'anchor_histograms': anchor_histograms,
             }
     return result
 
 
-def _run_aggr_model(positions, histograms, model, seq_len=11, batch_size=1024):
+def _run_aggr_model(positions, histograms, anchor_positions, anchor_histograms,
+                    model, seq_len=11, batch_size=1024):
+    """Run AggrAttRNN on all positions using only anchor positions as window context.
+
+    Anchor positions (cov >= cov_cf) supply the neighborhood histograms so that
+    low-coverage sites never pollute the context of their neighbors, while still
+    receiving a model-refined prediction themselves.
+    """
     import numpy as np
     import torch
-    from numpy.lib.stride_tricks import sliding_window_view
 
     if not positions:
         return []
 
     pad_len = seq_len // 2
+    bin_size = histograms[0].shape[0]
     device = next(model.parameters()).device
 
-    hist_mat = np.stack(histograms)
-    hist_padded = np.pad(hist_mat, ((pad_len, pad_len), (0, 0)), mode='constant')
-    hist_windows = np.swapaxes(sliding_window_view(hist_padded, seq_len, axis=0), 1, 2)
+    all_pos_arr = np.array(positions, dtype=np.int64)
+    all_hist_arr = np.stack(histograms).astype(np.float32)
+    N = len(positions)
 
-    pos_arr = np.array(positions)
-    pos_padded = np.pad(pos_arr, (pad_len, pad_len),
-                        constant_values=(positions[0] - 10000, positions[-1] + 10000))
-    pos_windows = sliding_window_view(pos_padded, seq_len)
-    centers = np.repeat(pos_arr, seq_len).reshape(-1, seq_len)
-    pos_dist = np.abs(pos_windows - centers).astype(np.float32)
+    M = len(anchor_positions)
+    if M > 0:
+        anchor_arr = np.array(anchor_positions, dtype=np.int64)
+        anchor_hist_arr = np.stack(anchor_histograms).astype(np.float32)
+    else:
+        anchor_arr = np.array([], dtype=np.int64)
+        anchor_hist_arr = np.zeros((0, bin_size), dtype=np.float32)
+
+    # Pad anchor arrays so boundary positions always have pad_len neighbors
+    pad_pos_l = all_pos_arr[0] - 10000
+    pad_pos_r = all_pos_arr[-1] + 10000
+    padded_anchor_pos = np.concatenate([
+        np.full(pad_len, pad_pos_l, dtype=np.int64),
+        anchor_arr,
+        np.full(pad_len, pad_pos_r, dtype=np.int64),
+    ])
+    padded_anchor_hist = np.concatenate([
+        np.zeros((pad_len, bin_size), dtype=np.float32),
+        anchor_hist_arr,
+        np.zeros((pad_len, bin_size), dtype=np.float32),
+    ], axis=0)
+
+    # For each position find its insertion index in anchor_arr (sorted)
+    insert_idx = np.searchsorted(anchor_arr, all_pos_arr)  # (N,)
+
+    # Detect which positions are themselves anchors so we skip self as neighbor
+    safe_idx = np.minimum(insert_idx, M - 1) if M > 0 else np.zeros(N, dtype=np.int64)
+    is_anchor = (insert_idx < M) & (anchor_arr[safe_idx] == all_pos_arr)
+
+    # Left neighbors in padded array: indices [k, k+1, ..., k+pad_len-1]
+    # Right neighbors: [k+pad_len, ...] for non-anchors, [k+pad_len+1, ...] for anchors
+    right_start = insert_idx + np.where(is_anchor, pad_len + 1, pad_len)  # (N,)
+
+    left_idx  = insert_idx[:, None]  + np.arange(pad_len, dtype=np.int64)[None, :]  # (N, pad_len)
+    right_idx = right_start[:, None] + np.arange(pad_len, dtype=np.int64)[None, :]  # (N, pad_len)
+
+    left_hists  = padded_anchor_hist[left_idx]   # (N, pad_len, bin_size)
+    right_hists = padded_anchor_hist[right_idx]  # (N, pad_len, bin_size)
+
+    hist_windows = np.concatenate(
+        [left_hists, all_hist_arr[:, None, :], right_hists], axis=1
+    )  # (N, seq_len, bin_size)
+
+    left_pos  = padded_anchor_pos[left_idx]   # (N, pad_len)
+    right_pos = padded_anchor_pos[right_idx]  # (N, pad_len)
+    window_pos = np.concatenate(
+        [left_pos, all_pos_arr[:, None], right_pos], axis=1
+    )  # (N, seq_len)
+    pos_dist = np.abs(window_pos - all_pos_arr[:, None]).astype(np.float32)
 
     new_probs = []
-    for i in range(0, len(hist_windows), batch_size):
-        b_hist = torch.from_numpy(hist_windows[i:i + batch_size]).float().to(device)
-        b_pos = torch.from_numpy(pos_dist[i:i + batch_size]).float().to(device)
+    for i in range(0, N, batch_size):
+        b_hist = torch.from_numpy(hist_windows[i:i + batch_size]).to(device)
+        b_pos  = torch.from_numpy(pos_dist[i:i + batch_size]).to(device)
         with torch.no_grad():
             outputs = model(b_pos, b_hist)
             probs = outputs.clamp(0.0, 1.0).cpu().numpy().flatten()
@@ -283,7 +346,11 @@ def call_mods_frequency_to_file(args):
         print("running AggrAttRNN inference..")
         refined = {}
         for chrom, info in data_dict.items():
-            refined[chrom] = _run_aggr_model(info['positions'], info['histograms'], model)
+            refined[chrom] = _run_aggr_model(
+                info['positions'], info['histograms'],
+                info['anchor_positions'], info['anchor_histograms'],
+                model,
+            )
 
         print("writing bedMethyl..")
         _write_bedmethyl_aggr(data_dict, refined, args.result_file, is_sort=is_sort)

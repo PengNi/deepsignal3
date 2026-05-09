@@ -143,9 +143,10 @@ def _run_batch_mtm(batch_info, batch_k, batch_s, batch_t, args, device, model):
     tpos     = torch.arange(L * S, device=device).unsqueeze(0).expand(B, -1)  # (B, L*S)
     x_static = tags.unsqueeze(-1)                                              # (B, 1)
 
-    with torch.inference_mode():
+    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    with torch.inference_mode(), torch.amp.autocast(device_type=device.type, dtype=amp_dtype, enabled=(device.type == "cuda")):
         logits = model(signals, kmer_expand, x_mask, tpos, x_static)
-        probs  = torch.softmax(logits, dim=-1)
+        probs  = torch.softmax(logits.float(), dim=-1)
         pred   = torch.argmax(logits, dim=1)
 
     probs_np = probs.cpu().numpy()
