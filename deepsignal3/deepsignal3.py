@@ -1302,6 +1302,8 @@ def main():
     stm_training.add_argument('--lr_scheduler', type=str, default='StepLR', required=False,
                              choices=["StepLR", "ReduceLROnPlateau", "CosineAnnealingLR"],
                              help="StepLR, ReduceLROnPlateau or CosineAnnealingLR, default StepLR")
+    stm_training.add_argument('--lr_warmup_epochs', type=int, default=0, required=False,
+                             help="linear warmup epochs before the main scheduler kicks in, default 0")
     stm_training.add_argument('--lr', type=float, default=0.001, required=False,
                              help="default 0.001. [lr should be lr*world_size when using multi gpus? "
                                   "or lower batch_size?]")

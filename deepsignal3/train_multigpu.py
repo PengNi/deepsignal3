@@ -801,8 +801,9 @@ def train_worker_aggregate(local_rank, global_world_size, args):
 
     # ==================== 优化器 & 调度器（AdamW + Cosine） ====================
     criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
 
+    warmup_epochs = getattr(args, 'lr_warmup_epochs', 0)
     if args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
                                       patience=args.lr_patience)
@@ -821,6 +822,12 @@ def train_worker_aggregate(local_rank, global_world_size, args):
     model.train()
     for epoch in range(args.max_epoch_num):
         train_sampler.set_epoch(epoch)
+
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            warmup_lr = args.lr * (epoch + 1) / warmup_epochs
+            for pg in optimizer.param_groups:
+                pg['lr'] = warmup_lr
+
         tlosses = []
         start = time.time()
 
@@ -866,7 +873,7 @@ def train_worker_aggregate(local_rank, global_world_size, args):
 
                 
                 if global_rank == 0:
-                    preds = torch.sigmoid(outputs)
+                    preds = outputs.clamp(0.0, 1.0)
                     val_all_preds.append(preds.cpu().numpy())
                     val_all_labels.append(label.cpu().numpy())
             
@@ -907,8 +914,9 @@ def train_worker_aggregate(local_rank, global_world_size, args):
                     curr_best_epoch = epoch + 1
                     torch.save(clean_state, model_dir + "aggregate.best.ckpt")
 
+                cur_lr = optimizer.param_groups[0]['lr']
                 sys.stderr.write(
-                    f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
+                    f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; LR: {cur_lr:.2e}; "
                     f"ValidLoss: {v_meanloss:.6f} | PCC: {pcc:.4f} | SCC: {scc:.4f} | MAE: {mae:.4f}\n"
                     f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
                 )
@@ -921,7 +929,9 @@ def train_worker_aggregate(local_rank, global_world_size, args):
             dist.barrier()
             break
 
-        if args.lr_scheduler == "ReduceLROnPlateau":
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            pass  # LR set manually above; skip scheduler during warmup
+        elif args.lr_scheduler == "ReduceLROnPlateau":
             scheduler.step(v_meanloss)
         else:
             scheduler.step()
@@ -976,8 +986,9 @@ def train_aggregate_cpu(args):
     )
 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
 
+    warmup_epochs = getattr(args, 'lr_warmup_epochs', 0)
     if args.lr_scheduler == "ReduceLROnPlateau":
         scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
                                       patience=args.lr_patience)
@@ -994,6 +1005,11 @@ def train_aggregate_cpu(args):
 
     model.train()
     for epoch in range(args.max_epoch_num):
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            warmup_lr = args.lr * (epoch + 1) / warmup_epochs
+            for pg in optimizer.param_groups:
+                pg['lr'] = warmup_lr
+
         tlosses = []
         start = time.time()
 
@@ -1023,11 +1039,11 @@ def train_aggregate_cpu(args):
                 pos, hist, label = pos.to(device), hist.to(device), label.to(device)
                 outputs = model(pos.unsqueeze(-1), hist).squeeze(-1)
                 vlosses.append(criterion(outputs, label).item())
-                val_preds.append(torch.sigmoid(outputs).numpy())
+                val_preds.append(outputs.clamp(0.0, 1.0).numpy())
                 val_labels.append(label.numpy())
 
         v_meanloss = np.mean(vlosses)
-        val_preds = np.concatenate(val_preds)
+        val_preds = np.concatenate(val_preds).clip(0.0, 1.0)
         val_labels = np.concatenate(val_labels)
         pcc, _ = pearsonr(val_preds, val_labels)
         scc, _ = spearmanr(val_preds, val_labels)
@@ -1045,8 +1061,9 @@ def train_aggregate_cpu(args):
         else:
             no_improve_count += 1
 
+        cur_lr = optimizer.param_groups[0]['lr']
         sys.stderr.write(
-            f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; "
+            f"Aggregate Epoch [{epoch+1}/{args.max_epoch_num}]; LR: {cur_lr:.2e}; "
             f"ValidLoss: {v_meanloss:.6f} | PCC: {pcc:.4f} | SCC: {scc:.4f} | MAE: {mae:.4f}\n"
             f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | NoImprove: {no_improve_count}/{patience}\n"
         )
@@ -1057,7 +1074,9 @@ def train_aggregate_cpu(args):
             sys.stderr.write(f"[aggregate-cpu] Early stop at epoch {epoch+1}\n")
             break
 
-        if args.lr_scheduler == "ReduceLROnPlateau":
+        if warmup_epochs > 0 and epoch < warmup_epochs:
+            pass  # LR set manually above; skip scheduler during warmup
+        elif args.lr_scheduler == "ReduceLROnPlateau":
             scheduler.step(v_meanloss)
         else:
             scheduler.step()
@@ -1365,6 +1384,8 @@ def main():
     st_training.add_argument('--lr_scheduler', type=str, default='StepLR', required=False,
                              choices=["StepLR", "ReduceLROnPlateau", "CosineAnnealingLR"],
                              help="StepLR, ReduceLROnPlateau or CosineAnnealingLR, default StepLR")
+    st_training.add_argument('--lr_warmup_epochs', type=int, default=0, required=False,
+                             help="linear warmup epochs for LinearWarmupCosine scheduler, default 0")
     st_training.add_argument('--lr', type=float, default=0.001, required=False,
                              help="default 0.001. [lr should be lr*world_size when using multi gpus? "
                                   "or lower batch_size?]")
