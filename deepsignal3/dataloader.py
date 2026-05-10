@@ -276,25 +276,27 @@ def generate_offsets(filename):
 
 class SignalFeaData1s(Dataset):
     def __init__(self, filename, offsets, linenum, transform=None):
-        # print(">>>using linecache to access '{}'<<<\n"
-        #       ">>>after done using the file, "
-        #       "remember to use linecache.clearcache() to clear cache for safety<<<".format(filename))
         self._filename = os.path.abspath(filename)
         self._total_data = linenum
         self._transform = transform
-        
         self._offsets = offsets
-        self._current_offset = 0
+        # opened lazily per worker process to avoid per-sample open/close overhead
+        self._file = None
 
     def __getitem__(self, idx):
-        offset = self._offsets[idx]
-        with open(self._filename, "r") as rf:
-            rf.seek(offset)
-            line = rf.readline()
+        if self._file is None:
+            self._file = open(self._filename, "r")
+        self._file.seek(self._offsets[idx])
+        line = self._file.readline()
         output = parse_a_line1(line)
         if self._transform is not None:
             output = self._transform(output)
         return output
+
+    def __del__(self):
+        if self._file is not None:
+            self._file.close()
+            self._file = None
 
     def __len__(self):
         return self._total_data

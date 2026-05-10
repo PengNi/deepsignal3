@@ -32,7 +32,7 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from datetime import timedelta
-from torch.cuda.amp import autocast, GradScaler # [新增] 引入混合精度
+from torch.cuda.amp import autocast  # type: ignore[import]
 from scipy.stats import pearsonr, spearmanr
 
 # add this export temporarily
@@ -285,7 +285,6 @@ def train_worker(local_rank, global_world_size, args):
                 )
                 vloss = criterion(voutputs, vlabels)
 
-                dist.barrier()
                 vloss = reduce_mean(vloss, global_world_size)
 
                 _, vpredicted = torch.max(vlogits.data, 1)
@@ -570,25 +569,15 @@ def train_worker_mtm(local_rank, global_world_size, args):
 
             optimizer.zero_grad()
 
-            # [优化] 混合精度前向
-            # with autocast(): # [注释] 关闭 autocast
-            outputs = model(
-                signals_view, kmer_expand, x_mask, t, x_static,
-            )
-            loss = criterion(outputs, labels)
+            with autocast(dtype=torch.bfloat16):
+                outputs = model(
+                    signals_view, kmer_expand, x_mask, t, x_static,
+                )
+                loss = criterion(outputs, labels)
 
-            # [优化] 混合精度反向与更新
-            # scaler.scale(loss).backward() # [注释]
-            loss.backward() # [新增] 标准反向传播
-
-            # scaler.unscale_(optimizer) # Unscale 用于梯度裁剪 [注释]
-            
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(all_params, 1.0)
-            
-            # scaler.step(optimizer) # [注释]
-            optimizer.step() # [新增] 标准更新
-
-            # scaler.update() # [注释]
+            optimizer.step()
 
             tlosses.append(loss.detach().item())
 
@@ -632,11 +621,11 @@ def train_worker_mtm(local_rank, global_world_size, args):
                 vx_static = vtags.unsqueeze(-1)
 
                 # [优化] 验证也开启 autocast 加速
-                # with autocast(): # [注释] 关闭 autocast
-                voutputs = model(
-                    vsignals, vkmer, vx_mask, vt, vx_static,
-                )
-                vloss = criterion(voutputs, vlabels)
+                with autocast(dtype=torch.bfloat16):
+                    voutputs = model(
+                        vsignals, vkmer, vx_mask, vt, vx_static,
+                    )
+                    vloss = criterion(voutputs, vlabels)
 
                 vloss = reduce_mean(vloss, global_world_size) # 聚合多卡 Loss
 
