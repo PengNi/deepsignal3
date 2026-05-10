@@ -53,6 +53,13 @@ def main_call_freq(args):
     call_mods_frequency_to_file(args)
 
 
+def main_call_read_calib(args):
+    from .call_mods_freq import call_read_calib_to_file
+
+    display_args(args)
+    call_read_calib_to_file(args)
+
+
 def main_train(args):
     from .train import (
         train,
@@ -133,6 +140,12 @@ def main():
     sub_call_mods = subparsers.add_parser("call_mods", description="call modifications")
     sub_call_freq = subparsers.add_parser(
         "call_freq", description="call frequency of modifications at genome level"
+    )
+    sub_call_read_calib = subparsers.add_parser(
+        "call_read_calib",
+        description="Phase 1.5: ReadCalibRNN read-level calibration. "
+                    "Reads per-read call TSV from call_mods and writes a calibrated TSV "
+                    "with updated prob_0/prob_1/called_label using intra-read CpG context.",
     )
     sub_extract = subparsers.add_parser(
         "extract",
@@ -624,6 +637,33 @@ def main():
     )
 
     sub_call_freq.set_defaults(func=main_call_freq)
+
+    # sub_call_read_calib ====================================================================
+    scrc_in = sub_call_read_calib.add_argument_group("INPUT")
+    scrc_in.add_argument("--input_path", "-i", action="append", type=str, required=True,
+                         help="per-read call TSV file(s) or directory from call_mods. "
+                              "Can be used multiple times.")
+    scrc_in.add_argument("--file_uid", type=str, default=None,
+                         help="unique string shared by all target files in a directory")
+
+    scrc_out = sub_call_read_calib.add_argument_group("OUTPUT")
+    scrc_out.add_argument("--result_file", "-o", type=str, required=True,
+                          help="output calibrated TSV file path")
+
+    scrc_model = sub_call_read_calib.add_argument_group("MODEL")
+    scrc_model.add_argument("--read_calib_model", "-m", type=str, required=True,
+                            help="ReadCalibRNN checkpoint (.ckpt)")
+    scrc_model.add_argument("--read_calib_hidden", type=int, default=32,
+                            help="hidden size, must match trained model, default 32")
+    scrc_model.add_argument("--read_calib_seq_len", type=int, default=11,
+                            help="window size K, must match trained model, default 11")
+    scrc_model.add_argument("--read_calib_model_type", type=str, default="attbigru",
+                            choices=["attbigru", "attbilstm"],
+                            help="model architecture, default attbigru")
+    scrc_model.add_argument("--batch_size", type=int, default=4096,
+                            help="inference batch size, default 4096")
+
+    sub_call_read_calib.set_defaults(func=main_call_read_calib)
 
     # sub_extract ============================================================================
     se_input = sub_extract.add_argument_group("INPUT")
@@ -1176,10 +1216,11 @@ def main():
         "--model_class",
         type=str,
         default="bilstm",
-        choices=["bilstm", "mtm", "aggregate"],
+        choices=["bilstm", "mtm", "aggregate", "read_calib"],
         required=False,
         help="model class: 'bilstm' (ModelBiLSTM), 'mtm' (modelMTM), "
-             "'aggregate' (site-level AggrAttRNN). default: bilstm",
+             "'aggregate' (site-level AggrAttRNN), "
+             "'read_calib' (read-level ReadCalibRNN). default: bilstm",
     )
     stm_train.add_argument(
         "--seq_len",
@@ -1316,6 +1357,15 @@ def main():
                          help="aggregate model architecture, default attbigru")
     stm_agg.add_argument('--aggregate_hidden', type=int, default=32, required=False,
                          help="hidden size for aggregate model, default 32")
+
+    stm_rc = sub_trainm.add_argument_group("READ_CALIB MODEL_HYPER (--model_class read_calib)")
+    stm_rc.add_argument('--read_calib_model_type', type=str, default="attbigru",
+                        choices=["attbigru", "attbilstm"], required=False,
+                        help="ReadCalibRNN architecture, default attbigru")
+    stm_rc.add_argument('--read_calib_hidden', type=int, default=32, required=False,
+                        help="hidden size for ReadCalibRNN, default 32")
+    stm_rc.add_argument('--read_calib_seq_len', type=int, default=11, required=False,
+                        help="K window size (CpG sites per read context), default 11")
 
     stm_trainingp = sub_trainm.add_argument_group("TRAINING PARALLEL")
     stm_trainingp.add_argument("--nodes", default=1, type=int,

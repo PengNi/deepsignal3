@@ -464,3 +464,29 @@ class AggregateDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.pos_dist[idx], self.histos[idx], self.labels[idx]
+
+
+class ReadCalibDataset(Dataset):
+    """Dataset for ReadCalibRNN training.
+
+    npz file must contain:
+        window_probs:   float32 (N, K)  — HTE prob_1 for K window positions
+        window_offsets: float32 (N, K)  — genomic distance from target (bp)
+        window_valid:   float32 (N, K)  — 1.0 real CpG, 0.0 padding
+        read_feats:     float32 (N, 3)  — [log1p(n_cpg), mean_prob, std_prob]
+        labels:         float32 (N,)    — binary WGBS label (0.0 or 1.0)
+    """
+    def __init__(self, npz_path):
+        data = np.load(npz_path)
+        self.window_probs   = torch.from_numpy(data['window_probs']).float()    # (N, K)
+        self.window_offsets = torch.from_numpy(data['window_offsets']).float()  # (N, K)
+        self.window_valid   = torch.from_numpy(data['window_valid']).float()    # (N, K)
+        self.read_feats     = torch.from_numpy(data['read_feats']).float()      # (N, 3)
+        self.labels         = torch.from_numpy(data['labels']).float()          # (N,)
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return (self.window_probs[idx], self.window_offsets[idx],
+                self.window_valid[idx], self.read_feats[idx], self.labels[idx])

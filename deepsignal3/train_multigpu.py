@@ -11,14 +11,16 @@ import time
 import re
 
 from .models import (
-    ModelBiLSTM, 
+    ModelBiLSTM,
     AggrAttRNN,
+    ReadCalibRNN,
     modelMTM
 )
 from .dataloader import (
     SignalFeaData1s,
     generate_offsets,
     AggregateDataset,
+    ReadCalibDataset,
 )
 from .dataloader import clear_linecache
 from .utils.process_utils import display_args
@@ -1064,6 +1066,164 @@ def train_aggregate_cpu(args):
     clear_linecache()
 
 
+def train_read_calib_cpu(args):
+    """Read-level calibration model (ReadCalibRNN) single-process CPU training.
+
+    Training data must be an npz file produced by scripts/prepare_read_calib_data.py,
+    containing: window_probs, window_offsets, window_valid, read_feats, labels.
+    Loss: binary cross-entropy (BCE) on logit output.
+    """
+    from scipy.stats import pearsonr
+
+    device = torch.device('cpu')
+    sys.stderr.write("[read_calib-cpu] No GPU detected, training on CPU.\n")
+
+    model_dir = os.path.abspath(args.model_dir).rstrip("/")
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    else:
+        model_regex = re.compile(r"read_calib\.(attbigru|attbilstm)\.b\d+_epoch\d+\.ckpt*")
+        for mfile in os.listdir(model_dir):
+            if model_regex.match(mfile):
+                os.remove(os.path.join(model_dir, mfile))
+    model_dir += "/"
+
+    model = ReadCalibRNN(
+        seq_len=args.read_calib_seq_len,
+        num_layers=1,
+        num_classes=1,
+        dropout_rate=args.dropout_rate,
+        hidden_size=args.read_calib_hidden,
+        n_read_feats=3,
+        model_type=args.read_calib_model_type,
+    )
+
+    if args.init_model is not None:
+        sys.stderr.write(f"[read_calib-cpu] loading pre-trained model: {args.init_model}\n")
+        para_dict = torch.load(args.init_model, map_location='cpu')
+        model_dict = model.state_dict()
+        model_dict.update({k: v for k, v in para_dict.items() if k in model_dict})
+        model.load_state_dict(model_dict)
+
+    model.to(device)
+
+    sys.stderr.write("[read_calib-cpu] reading ReadCalib data..\n")
+    train_dataset = ReadCalibDataset(args.train_file)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.dl_num_workers, pin_memory=False,
+    )
+    valid_dataset = ReadCalibDataset(args.valid_file)
+    valid_loader = torch.utils.data.DataLoader(
+        valid_dataset, batch_size=args.batch_size, shuffle=False,
+        num_workers=args.dl_num_workers, pin_memory=False,
+    )
+
+    criterion = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+
+    if args.lr_scheduler == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=args.lr_decay,
+                                      patience=args.lr_patience)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.max_epoch_num, eta_min=1e-8)
+
+    total_step = len(train_loader)
+    sys.stderr.write(f"[read_calib-cpu] total_step: {total_step}\n")
+
+    curr_lowest_loss = float('inf')
+    curr_best_epoch = 0
+    no_improve_count = 0
+    patience = args.patience
+
+    model.train()
+    for epoch in range(args.max_epoch_num):
+        tlosses = []
+        start = time.time()
+
+        for i, (wprobs, woffs, wvalid, rfeats, labels) in enumerate(train_loader):
+            wprobs   = wprobs.to(device)
+            woffs    = woffs.to(device)
+            wvalid   = wvalid.to(device)
+            rfeats   = rfeats.to(device)
+            labels   = labels.to(device)
+
+            optimizer.zero_grad()
+            logits = model(wprobs, woffs, wvalid, rfeats).squeeze(-1)  # (N,)
+            loss = criterion(logits, labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            tlosses.append(loss.item())
+
+            if (i + 1) % args.step_interval == 0 or (i + 1) == total_step:
+                sys.stderr.write(
+                    f"ReadCalib Epoch [{epoch+1}/{args.max_epoch_num}], "
+                    f"Step [{i+1}/{total_step}]; "
+                    f"TrainLoss: {np.mean(tlosses):.6f}; "
+                    f"Time: {time.time()-start:.2f}s\n"
+                )
+                start = time.time()
+                tlosses = []
+
+        model.eval()
+        with torch.no_grad():
+            vlosses, val_preds, val_labels = [], [], []
+            for wprobs, woffs, wvalid, rfeats, labels in valid_loader:
+                wprobs  = wprobs.to(device)
+                woffs   = woffs.to(device)
+                wvalid  = wvalid.to(device)
+                rfeats  = rfeats.to(device)
+                labels  = labels.to(device)
+                logits  = model(wprobs, woffs, wvalid, rfeats).squeeze(-1)
+                vlosses.append(criterion(logits, labels).item())
+                val_preds.append(torch.sigmoid(logits).cpu().numpy())
+                val_labels.append(labels.cpu().numpy())
+
+        v_meanloss = np.mean(vlosses)
+        val_preds  = np.concatenate(val_preds)
+        val_labels = np.concatenate(val_labels)
+        val_acc    = np.mean((val_preds > 0.5) == val_labels)
+        pcc, _     = pearsonr(val_preds, val_labels)
+
+        clean_state = {k.replace("_orig_mod.", ""): v for k, v in model.state_dict().items()}
+        save_path = model_dir + f"read_calib.{args.read_calib_model_type}.b{args.read_calib_seq_len}_epoch{epoch+1}.ckpt"
+        torch.save(clean_state, save_path)
+
+        if v_meanloss < curr_lowest_loss:
+            curr_lowest_loss = v_meanloss
+            no_improve_count = 0
+            curr_best_epoch = epoch + 1
+            torch.save(clean_state, model_dir + "read_calib.best.ckpt")
+        else:
+            no_improve_count += 1
+
+        sys.stderr.write(
+            f"ReadCalib Epoch [{epoch+1}/{args.max_epoch_num}]; "
+            f"ValidLoss: {v_meanloss:.6f} | Acc: {val_acc:.4f} | PCC: {pcc:.4f}\n"
+            f"BestValLoss: {curr_lowest_loss:.6f} (epoch {curr_best_epoch}) | "
+            f"NoImprove: {no_improve_count}/{patience}\n"
+        )
+
+        model.train()
+
+        if no_improve_count >= patience and epoch >= args.min_epoch_num - 1:
+            sys.stderr.write(f"[read_calib-cpu] Early stop at epoch {epoch+1}\n")
+            break
+
+        if args.lr_scheduler == "ReduceLROnPlateau":
+            scheduler.step(v_meanloss)
+        else:
+            scheduler.step()
+
+    sys.stderr.write(
+        f"✅ Best ReadCalib model at epoch {curr_best_epoch} "
+        f"(ValLoss: {curr_lowest_loss:.6f})\n"
+    )
+    clear_linecache()
+
+
 def train_multigpu(args):
     total_start = time.time()
     torch.manual_seed(args.tseed)
@@ -1073,6 +1233,10 @@ def train_multigpu(args):
 
     if args.model_class == "aggregate" and not use_cuda:
         train_aggregate_cpu(args)
+        return
+
+    if args.model_class == "read_calib" and not use_cuda:
+        train_read_calib_cpu(args)
         return
 
     if use_cuda:
@@ -1256,6 +1420,15 @@ def main():
                         help="aggregate model architecture, default attbigru")
     st_agg.add_argument('--aggregate_hidden', type=int, default=32, required=False,
                         help="hidden size for aggregate model, default 32")
+
+    st_rc = parser.add_argument_group("READ_CALIB MODEL_HYPER (--model_class read_calib)")
+    st_rc.add_argument('--read_calib_model_type', type=str, default="attbigru",
+                       choices=["attbigru", "attbilstm"], required=False,
+                       help="ReadCalibRNN architecture, default attbigru")
+    st_rc.add_argument('--read_calib_hidden', type=int, default=32, required=False,
+                       help="hidden size for ReadCalibRNN, default 32")
+    st_rc.add_argument('--read_calib_seq_len', type=int, default=11, required=False,
+                       help="K window size (CpG sites per read context), default 11")
 
     st_trainingp = parser.add_argument_group("TRAINING PARALLEL")
     st_trainingp.add_argument("--nodes", default=1, type=int,

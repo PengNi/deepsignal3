@@ -468,6 +468,87 @@ class AggrAttRNN(nn.Module):
         # out = self.softmax(out)
 
         return out
+
+
+class ReadCalibRNN(nn.Module):
+    """Read-level calibration: uses K neighboring CpG sites on the same read
+    to calibrate the methylation probability of a target site.
+
+    Symmetric to AggrAttRNN — where AggrAttRNN aggregates N reads at one site,
+    ReadCalibRNN aggregates K co-read sites for one target.
+
+    Input (per batch):
+        window_probs:   (N, K)     HTE prob_1 of K window positions
+        window_offsets: (N, K)     genomic distance from target (bp)
+        window_valid:   (N, K)     1.0 = real CpG, 0.0 = padding
+        read_feats:     (N, n_rf)  read-level features [log1p(n_cpg), mean_prob, std_prob]
+    Output:
+        logit: (N, 1) — apply sigmoid to get calibrated probability
+    """
+
+    def __init__(self, seq_len=11, num_layers=1, num_classes=1,
+                 dropout_rate=0.5, hidden_size=32, n_read_feats=3,
+                 model_type='attbigru'):
+        super(ReadCalibRNN, self).__init__()
+        self.seq_len = seq_len
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.model_type = model_type
+        self.n_read_feats = n_read_feats
+
+        # 3 features per window position: prob, offset_norm, is_valid
+        self.input_dim = 3
+
+        if model_type == 'attbigru':
+            self.rnn_cell = 'gru'
+            self.rnn = nn.GRU(self.input_dim, hidden_size, num_layers,
+                              dropout=0, batch_first=True, bidirectional=True)
+        elif model_type == 'attbilstm':
+            self.rnn_cell = 'lstm'
+            self.rnn = nn.LSTM(self.input_dim, hidden_size, num_layers,
+                               dropout=0, batch_first=True, bidirectional=True)
+        else:
+            raise ValueError("model_type must be 'attbigru' or 'attbilstm'")
+
+        self._att = Attention(hidden_size * 2, hidden_size * 2, hidden_size)
+
+        # project read-level features to match context size
+        self.read_feat_proj = nn.Sequential(
+            nn.Linear(n_read_feats, hidden_size * 2),
+            nn.ReLU(),
+        )
+
+        self.dropout1 = nn.Dropout(p=dropout_rate)
+        self.fc1 = nn.Linear(hidden_size * 4, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, num_classes)
+
+    def get_model_type(self):
+        return self.model_type
+
+    def forward(self, window_probs, window_offsets, window_valid, read_feats):
+        # window_probs, window_offsets, window_valid: (N, K)
+        # read_feats: (N, n_rf)
+        offsets_norm = (window_offsets.float() / 1000.0).clamp(0.0, 10.0)
+        x = torch.stack([window_probs.float(), offsets_norm, window_valid.float()], dim=-1)  # (N, K, 3)
+
+        out, n_states = self.rnn(x)  # out: (N, K, 2H)
+
+        h_n = n_states[0] if self.rnn_cell == 'lstm' else n_states
+        h_n = h_n.reshape(self.num_layers, 2, -1, self.hidden_size)[-1]  # last layer: (2, N, H)
+        h_n = h_n.transpose(0, 1).reshape(-1, 1, 2 * self.hidden_size)   # (N, 1, 2H)
+
+        context, _ = self._att(h_n, out)  # (N, 2H)
+
+        rf = self.read_feat_proj(read_feats.float())  # (N, 2H)
+        combined = torch.cat([context, rf], dim=-1)   # (N, 4H)
+
+        out = self.dropout1(combined)
+        out = self.relu(self.fc1(out))
+        out = self.fc2(out)   # (N, 1)
+        return out
+
+
 def mask_3d(inputs, seq_len, mask_value=0.):
     batches = inputs.size()[0]
     assert batches == len(seq_len)

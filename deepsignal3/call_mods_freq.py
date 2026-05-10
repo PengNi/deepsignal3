@@ -303,6 +303,191 @@ def _write_bedmethyl_aggr(data_dict, refined_probs_dict, output_file, is_sort=Fa
 
 
 # ─────────────────────────────────────────────
+# Mode 3: ReadCalibRNN-based read-level calibration
+# ─────────────────────────────────────────────
+
+def _build_read_windows(records, K=11):
+    """Group TSV records by readname, build K-window features per (read, site).
+
+    records: list of (chrom, pos, prob_1, line_idx) already sorted within each read by pos.
+    Returns arrays: window_probs, window_offsets, window_valid, read_feats, line_indices
+    each aligned so that result[i] corresponds to records[line_idx[i]].
+    """
+    import numpy as np
+    from collections import defaultdict
+
+    # group by (readname) — caller guarantees records are pre-grouped by readname
+    # here we receive one read's records at a time via the generator
+    raise NotImplementedError("Use _iter_read_windows instead")
+
+
+def _run_read_calib_model(mods_files, model, K=11, batch_size=4096):
+    """Two-pass streaming inference for ReadCalibRNN.
+
+    Pass 1: stream TSV → build per-readname dict {readname: [(chrom, pos, prob_1, orig_line)]}.
+            Done per-chromosome to bound memory.
+    Pass 2: for each read build K-window, run model in batches, collect calibrated probs.
+
+    Returns:
+        orig_lines: list[str]       — original TSV lines (in file order)
+        calib_prob1: np.ndarray     — calibrated prob_1 for each line (same order)
+    """
+    import numpy as np
+    from collections import defaultdict
+
+    pad_len = K // 2
+
+    # ── Pass 1: collect all records ──────────────────────────────────────────
+    # {readname: [(chrom, pos, prob_1, global_line_idx)]}
+    read_dict = defaultdict(list)
+    orig_lines = []
+
+    for mods_file in mods_files:
+        with _open_file(mods_file) as f:
+            for line in f:
+                line = line.rstrip('\n')
+                words = line.split('\t')
+                if len(words) < 10:
+                    orig_lines.append(line)
+                    continue
+                try:
+                    chrom    = words[0]
+                    pos      = int(words[1])
+                    readname = words[4]
+                    prob_1   = float(words[7])
+                except (ValueError, IndexError):
+                    orig_lines.append(line)
+                    continue
+                idx = len(orig_lines)
+                read_dict[readname].append((chrom, pos, prob_1, idx))
+                orig_lines.append(line)
+
+    # sort each read's sites by (chrom, pos)
+    for rn in read_dict:
+        read_dict[rn].sort(key=lambda t: (t[0], t[1]))
+
+    # ── Pass 2: build windows + run inference ────────────────────────────────
+    calib_prob1 = np.full(len(orig_lines), -1.0, dtype=np.float32)
+    device = next(model.parameters()).device
+
+    b_wprobs, b_woffs, b_wvalid, b_rfeats, b_lidx = [], [], [], [], []
+
+    def _flush_batch():
+        if not b_wprobs:
+            return
+        t_wprobs  = torch.tensor(np.stack(b_wprobs),  dtype=torch.float32, device=device)
+        t_woffs   = torch.tensor(np.stack(b_woffs),   dtype=torch.float32, device=device)
+        t_wvalid  = torch.tensor(np.stack(b_wvalid),  dtype=torch.float32, device=device)
+        t_rfeats  = torch.tensor(np.stack(b_rfeats),  dtype=torch.float32, device=device)
+        with torch.no_grad():
+            logits = model(t_wprobs, t_woffs, t_wvalid, t_rfeats).squeeze(-1)
+            probs  = torch.sigmoid(logits).cpu().numpy()
+        for p, li in zip(probs, b_lidx):
+            calib_prob1[li] = float(np.round(p, 6))
+        b_wprobs.clear(); b_woffs.clear(); b_wvalid.clear()
+        b_rfeats.clear(); b_lidx.clear()
+
+    import math
+    for readname, sites in read_dict.items():
+        n_cpg    = len(sites)
+        probs_r  = [s[2] for s in sites]
+        mean_p   = float(np.mean(probs_r))
+        std_p    = float(np.std(probs_r))
+        rf       = [math.log1p(n_cpg), mean_p, std_p]
+
+        chroms_r = [s[0] for s in sites]
+        pos_r    = [s[1] for s in sites]
+
+        for ci in range(n_cpg):
+            tgt_chrom = chroms_r[ci]
+            tgt_pos   = pos_r[ci]
+            line_idx  = sites[ci][3]
+
+            wp, wo, wv = [], [], []
+            for k in range(-pad_len, pad_len + 1):
+                j = ci + k
+                if 0 <= j < n_cpg and chroms_r[j] == tgt_chrom:
+                    wp.append(probs_r[j])
+                    wo.append(float(abs(pos_r[j] - tgt_pos)))
+                    wv.append(1.0)
+                else:
+                    wp.append(0.0)
+                    wo.append(0.0)
+                    wv.append(0.0)
+
+            b_wprobs.append(wp)
+            b_woffs.append(wo)
+            b_wvalid.append(wv)
+            b_rfeats.append(rf)
+            b_lidx.append(line_idx)
+
+            if len(b_wprobs) >= batch_size:
+                _flush_batch()
+
+    _flush_batch()
+    return orig_lines, calib_prob1
+
+
+def _write_calibrated_tsv(orig_lines, calib_prob1, output_file):
+    """Write calibrated TSV: same as input but with updated prob_0/prob_1/called_label."""
+    with open(output_file, 'w') as wf:
+        for i, line in enumerate(orig_lines):
+            p1 = calib_prob1[i]
+            if p1 < 0:          # line was not calibrated (parse error / short)
+                wf.write(line + '\n')
+                continue
+            words = line.split('\t')
+            p0 = round(1.0 - p1, 6)
+            words[6] = str(p0)
+            words[7] = str(round(p1, 6))
+            words[8] = '1' if p1 >= 0.5 else '0'
+            wf.write('\t'.join(words) + '\n')
+    print("calibrated TSV written: {}".format(output_file))
+
+
+def call_read_calib_to_file(args):
+    """Entry point for read-level calibration (Phase 1.5)."""
+    import torch
+    from collections import OrderedDict
+    from .models import ReadCalibRNN
+
+    print("[call_read_calib] start..")
+    start = time.time()
+
+    mods_files = _collect_files(args.input_path, getattr(args, 'file_uid', None))
+    print("get {} input file(s)..".format(len(mods_files)))
+
+    K           = getattr(args, 'read_calib_seq_len', 11)
+    hidden      = getattr(args, 'read_calib_hidden', 32)
+    model_type  = getattr(args, 'read_calib_model_type', 'attbigru')
+    batch_size  = getattr(args, 'batch_size', 4096)
+
+    print("loading ReadCalibRNN from {}..".format(args.read_calib_model))
+    model = ReadCalibRNN(seq_len=K, num_layers=1, num_classes=1,
+                         dropout_rate=0, hidden_size=hidden,
+                         n_read_feats=3, model_type=model_type)
+    checkpoint = torch.load(args.read_calib_model, map_location='cpu', weights_only=True)
+    try:
+        model.load_state_dict(checkpoint)
+    except RuntimeError:
+        new_sd = OrderedDict(
+            (k[7:] if k.startswith('module.') else k, v)
+            for k, v in checkpoint.items()
+        )
+        model.load_state_dict(new_sd)
+    model.eval()
+
+    print("running ReadCalibRNN inference..")
+    orig_lines, calib_prob1 = _run_read_calib_model(
+        mods_files, model, K=K, batch_size=batch_size)
+
+    print("writing calibrated TSV..")
+    _write_calibrated_tsv(orig_lines, calib_prob1, args.result_file)
+
+    print("[call_read_calib] costs {:.1f} seconds..".format(time.time() - start))
+
+
+# ─────────────────────────────────────────────
 # Unified entry point
 # ─────────────────────────────────────────────
 
@@ -407,6 +592,35 @@ def main():
 
     args = parser.parse_args()
     call_mods_frequency_to_file(args)
+
+
+def main_read_calib():
+    """Standalone CLI for read-level calibration (Phase 1.5)."""
+    parser = argparse.ArgumentParser(
+        description="ReadCalibRNN read-level calibration. "
+                    "Takes per-read call TSV from call_mods and outputs a "
+                    "calibrated TSV with updated prob_0/prob_1/called_label."
+    )
+    parser.add_argument("--input_path", "-i", action="append", type=str, required=True,
+                        help="per-read call TSV file(s) or directory. Can be used multiple times.")
+    parser.add_argument("--file_uid", type=str, default=None,
+                        help="unique string shared by all target files in a directory")
+    parser.add_argument("--result_file", "-o", type=str, required=True,
+                        help="output calibrated TSV file path")
+    parser.add_argument("--read_calib_model", "-m", type=str, required=True,
+                        help="ReadCalibRNN checkpoint (.ckpt)")
+    parser.add_argument("--read_calib_hidden", type=int, default=32,
+                        help="hidden size, must match trained model, default 32")
+    parser.add_argument("--read_calib_seq_len", type=int, default=11,
+                        help="window size K, must match trained model, default 11")
+    parser.add_argument("--read_calib_model_type", type=str, default="attbigru",
+                        choices=["attbigru", "attbilstm"],
+                        help="model architecture, default attbigru")
+    parser.add_argument("--batch_size", type=int, default=4096,
+                        help="inference batch size, default 4096")
+
+    args = parser.parse_args()
+    call_read_calib_to_file(args)
 
 
 if __name__ == "__main__":
