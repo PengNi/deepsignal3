@@ -317,6 +317,8 @@ def main():
                           help="[EXPERIMENTAL] use torch.compile, yes or no, default no")
     sc_infer.add_argument("--use_cpu", action="store_true", default=False,
                           help="force CPU inference even when GPUs are available")
+    sc_infer.add_argument("--nproc_cpu", type=int, default=1,
+                          help="number of CPU inference worker processes (CPU mode only, ignored on GPU)")
 
     sc_output = sub_call_mods.add_argument_group("OUTPUT")
     sc_output.add_argument(
