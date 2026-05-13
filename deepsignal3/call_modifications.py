@@ -64,10 +64,17 @@ def load_model_mtm(args, device):
     model.eval()
 
     if getattr(args, "use_compile", False):
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-        except Exception as e:
-            LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
+        if device.type == "cpu":
+            LOGGER.warning(
+                "torch.compile skipped on CPU: the inductor backend generates "
+                "invalid C++ for CPU targets in this PyTorch version. "
+                "Use --use_compile no, or run on a GPU."
+            )
+        else:
+            try:
+                model = torch.compile(model, mode="reduce-overhead")
+            except Exception as e:
+                LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
 
     return model
 
@@ -103,10 +110,17 @@ def load_model_bilstm(args, device):
     model.eval()
 
     if getattr(args, "use_compile", False):
-        try:
-            model = torch.compile(model, mode="reduce-overhead")
-        except Exception as e:
-            LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
+        if device.type == "cpu":
+            LOGGER.warning(
+                "torch.compile skipped on CPU: the inductor backend generates "
+                "invalid C++ for CPU targets in this PyTorch version. "
+                "Use --use_compile no, or run on a GPU."
+            )
+        else:
+            try:
+                model = torch.compile(model, mode="reduce-overhead")
+            except Exception as e:
+                LOGGER.warning(f"torch.compile failed, falling back to eager: {e}")
 
     return model
 
