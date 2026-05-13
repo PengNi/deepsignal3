@@ -250,8 +250,10 @@ def process_data_fast(signal, seq_read, motif_seqs, positions, args):
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
 
-    chrom_filter = getattr(args, "chrom", None)
-    if chrom_filter and ref_name != chrom_filter:
+    chrom_args = getattr(args, "chrom", None) or []
+    _excl = {c[2:] for c in chrom_args if c.startswith("no")}
+    _incl = {c for c in chrom_args if not c.startswith("no")}
+    if (_excl and ref_name in _excl) or (_incl and ref_name not in _incl):
         return []
 
     # Pre-compute tag_locs once per read
@@ -335,8 +337,10 @@ def process_data_bilstm(signal, seq_read, motif_seqs, positions, args):
     strand   = coords["strand"]   if coords else "."
     ref_name = coords["ref_name"] if coords else "."
 
-    chrom_filter = getattr(args, "chrom", None)
-    if chrom_filter and ref_name != chrom_filter:
+    chrom_args = getattr(args, "chrom", None) or []
+    _excl = {c[2:] for c in chrom_args if c.startswith("no")}
+    _incl = {c for c in chrom_args if not c.startswith("no")}
+    if (_excl and ref_name in _excl) or (_incl and ref_name not in _incl):
         return []
 
     # Pre-compute tag_locs once per read (BiLSTM currently doesn't use tag,
