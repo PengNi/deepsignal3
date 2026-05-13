@@ -242,8 +242,7 @@ def model_worker(rank, device, queue, pred_q, args, nproc_io):
         torch.backends.cudnn.benchmark = True
         torch.set_float32_matmul_precision("high")  # TF32 on Ampere+, free speedup
     else:
-        # Avoid CPU thread contention with multiprocessing workers
-        torch.set_num_threads(1)
+        torch.set_num_threads(max(1, args.cpu_threads_per_worker))
 
     is_mtm = (args.model_class == "mtm")
 
@@ -377,7 +376,16 @@ def tsv_producer(tsv_file, queues, args):
     n_workers = len(queues)
     BUF_SIZE = 128
     buffers = [[] for _ in range(n_workers)]
-    chrom_filter = getattr(args, "chrom", None)
+    chrom_args = getattr(args, "chrom", None) or []
+    chrom_include = {c for c in chrom_args if not c.startswith("no")}
+    chrom_exclude = {c[2:] for c in chrom_args if c.startswith("no")}
+
+    def _chrom_ok(c):
+        if chrom_exclude and c in chrom_exclude:
+            return False
+        if chrom_include and c not in chrom_include:
+            return False
+        return True
 
     open_fn = gzip.open if tsv_file.endswith(".gz") else open
     with open_fn(tsv_file, "rt") as fh:
@@ -389,7 +397,7 @@ def tsv_producer(tsv_file, queues, args):
             if len(words) < 12:
                 continue
 
-            if chrom_filter and words[0] != chrom_filter:
+            if not _chrom_ok(words[0]):
                 continue
 
             sampleinfo = "\t".join(words[:6])
@@ -458,10 +466,19 @@ def inference_ultra(args):
 
     if use_gpu:
         devices = [torch.device(f"cuda:{i}") for i in range(num_gpu)]
+        nproc_cpu = getattr(args, "nproc_cpu", 1)
+        if nproc_cpu > 1:
+            LOGGER.info(f"--nproc_cpu ignored on GPU, using {num_gpu} GPU worker(s)")
         LOGGER.info(f"Using {num_gpu} GPU(s): {devices}")
     else:
-        devices = [torch.device("cpu")]
-        LOGGER.info("No GPU available or --use_cpu set. Running on CPU.")
+        nproc_cpu = max(1, getattr(args, "nproc_cpu", 1))
+        devices = [torch.device("cpu")] * nproc_cpu
+        n_cpu_cores = os.cpu_count() or 1
+        args.cpu_threads_per_worker = max(1, n_cpu_cores // nproc_cpu)
+        LOGGER.info(
+            f"No GPU available or --use_cpu set. Running on CPU "
+            f"({nproc_cpu} worker(s), {args.cpu_threads_per_worker} thread(s) each)."
+        )
 
     n_workers = len(devices)
     nproc_io  = max(1, args.nproc)
@@ -575,6 +592,8 @@ def main():
                          help="Enable torch.compile (PyTorch >= 2.0, may speed up GPU inference)")
     p_model.add_argument("--use_cpu", action="store_true", default=False,
                          help="Force CPU inference even when GPUs are available")
+    p_model.add_argument("--nproc_cpu", type=int, default=1,
+                         help="Number of CPU inference worker processes (CPU mode only, ignored on GPU)")
 
     # ── Shared hyper-params (both models) ──────────
     p_hp = parser.add_argument_group("MODEL_HYPER")
@@ -629,9 +648,11 @@ def main():
                         help="Plant mode: proximity tag counts any C within "
                              "±10 bp (motif-agnostic). Default (human mode): "
                              "only same-motif sites are counted.")
-    p_ext.add_argument("--chrom",            type=str, default=None,
-                        help="Only process reads mapped to this chromosome/contig "
-                             "(e.g. chr1). Default: process all chromosomes.")
+    p_ext.add_argument("--chrom",            type=str, nargs="+", default=None,
+                        help="Chromosome filter. Bare names include only those "
+                             "chromosomes (e.g. --chrom chr1 chr2). Prefix with 'no' "
+                             "to exclude (e.g. --chrom nochr1 nochrM). Include and "
+                             "exclude can be mixed. Default: process all chromosomes.")
 
     # ── Performance ────────────────────────────────
     p_perf = parser.add_argument_group("PERFORMANCE")

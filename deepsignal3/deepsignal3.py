@@ -439,12 +439,13 @@ def main():
     )
     sc_f5.add_argument(
         "--chrom",
-        action="store",
+        nargs="+",
         type=str,
         required=False,
         default=None,
-        help="only process reads mapped to this chromosome/contig (e.g. chr1). "
-        "default None (process all chromosomes)",
+        help="chromosome filter. bare names include only those chromosomes "
+        "(e.g. --chrom chr1 chr2). prefix with 'no' to exclude "
+        "(e.g. --chrom nochr1 nochrM). default None (process all chromosomes)",
     )
 
     sc_f5.add_argument(
