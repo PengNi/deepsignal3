@@ -1,77 +1,62 @@
-#! /usr/bin/python
-"""
-select rows of file randomly, with a header
-"""
 import random
 import argparse
+import gzip
 
 
 def str2bool(v):
-    # susendberg's function
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def random_select_file_rows(ori_file, w_file, maxrownum=10000, header=True):
-    """
+def get_reader(filename):
+    if filename.endswith('.gz'):
+        return gzip.open(filename, 'rt', encoding='utf-8')
+    return open(filename, 'r', encoding='utf-8')
 
-    :param ori_file:
-    :param w_file:
-    :param maxrownum:
-    :param header:
-    :return:
-    """
-    # whole_rows = open(ori_file).readlines()
-    # nrows = len(whole_rows) - 1
 
-    nrows = 0
-    with open(ori_file) as rf:
-        for line in rf:
-            nrows += 1
-    if header:
-        nrows -= 1
-    print('thera are {} lines (rm header if a header exists) in the file {}'.format(nrows, ori_file))
+def random_select_file_rows(ori_file, w_file, maxrownum, header=True):
+    print(f"Pass 1: counting lines in {ori_file} ...")
 
-    actual_nline = maxrownum
-    if nrows <= actual_nline:
-        actual_nline = nrows
-        print('gonna return all lines in ori_file {}'.format(ori_file))
-
-    random_lines = random.sample(range(1, nrows+1), actual_nline)
-    random_lines = [0] + sorted(random_lines)
-    random_lines[-1] = nrows
-
-    wf = open(w_file, 'w')
-    with open(ori_file) as rf:
+    total = 0
+    with get_reader(ori_file) as f:
         if header:
-            wf.write(next(rf))
-        for i in range(1, len(random_lines)):
-            chosen_line = ''
-            for j in range(0, random_lines[i]-random_lines[i-1]):
-                # print(j)
-                chosen_line = next(rf)
-            wf.write(chosen_line)
-    wf.close()
-    print('random_select_file_rows finished..')
+            f.readline()
+        for _ in f:
+            total += 1
+
+    print(f"  Total lines: {total}")
+
+    k = min(maxrownum, total)
+    # set of selected line indices — memory: ~28 bytes × k
+    selected = set(random.sample(range(total), k))
+
+    print(f"Pass 2: writing {k} selected lines ...")
+
+    with get_reader(ori_file) as f, \
+            open(w_file, 'w', buffering=1024 * 1024 * 32) as wf:
+        if header:
+            wf.write(f.readline())
+        for i, line in enumerate(f):
+            if i in selected:
+                wf.write(line)
+
+    print(f"Done. Wrote {k} lines to {w_file}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='select certain number of lines from a file randomly')
-    parser.add_argument('--ori_filepath', type=str, required=True,
-                        help='the path of file where lines are gonna be selected')
-    parser.add_argument('--write_filepath', type=str, required=True,
-                        help='the write filepath')
+    parser = argparse.ArgumentParser(
+        description='Two-pass uniform sampling for large gzip/plain files.')
+    parser.add_argument('--ori_filepath', type=str, required=True)
+    parser.add_argument('--write_filepath', type=str, required=True)
     parser.add_argument('--num_lines', type=int, required=True)
-    parser.add_argument('--header', type=str, required=False,
-                        default='true',
-                        help='if the ori file has header or not. default true, t, yes, 1')
-
+    parser.add_argument('--header', type=str, default='true')
     args = parser.parse_args()
 
-    orifile = args.ori_filepath
-    wfile = args.write_filepath
-    srownum = args.num_lines
-    header = str2bool(args.header)
-    random_select_file_rows(orifile, wfile, srownum, header)
+    random_select_file_rows(
+        args.ori_filepath,
+        args.write_filepath,
+        args.num_lines,
+        str2bool(args.header)
+    )
 
 
 if __name__ == '__main__':

@@ -111,7 +111,7 @@ guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_
 # multi_fast5s/ is the folder where hg002.r10.4.test.fast5 is stored
 # fast5s_guppy/ is the output folder
 # 2. deepsignal3 call_mods
-deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
@@ -160,7 +160,7 @@ deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4
 deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.bilstm.ckpt --model_class bilstm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 
 # fast5 files as input, use GPU
-deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --reference_path chm13v2.0.fa --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
