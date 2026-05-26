@@ -289,6 +289,8 @@ def _write_bedmethyl_aggr(data_dict, refined_probs_dict, output_file, is_sort=Fa
             info = data_dict[chrom]
             probs = refined_probs_dict.get(chrom, [])
             for i, pos in enumerate(info['positions']):
+                if pos < 0:
+                    continue
                 cov = info['coverages'][i]
                 strand = info['strands'][i]
                 prob = probs[i]
