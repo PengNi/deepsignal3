@@ -1,4 +1,4 @@
-include deepsignal3/utils/*
+include pyrameth/utils/*
 include requirements.txt
 include README.rst
 include LICENSE

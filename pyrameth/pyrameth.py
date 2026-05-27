@@ -6,7 +6,7 @@ import argparse
 
 from .utils.process_utils import display_args, detect_file_type
 
-from ._version import DEEPSIGNAL3_VERSION
+from ._version import PYRAMETH_VERSION
 
 
 def main_extraction(args):
@@ -21,6 +21,12 @@ def main_extraction(args):
     else:
         from .extract_features import extract_features
         extract_features(args)
+
+
+def main_call_mods_bam(args):
+    from .call_mods_bam import inference_bam
+    display_args(args)
+    inference_bam(args)
 
 
 def main_call_mods(args):
@@ -110,8 +116,8 @@ def main_trainm(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="deepsignal3",
-        description="deepsignal3 detects base modifications from Nanopore "
+        prog="pyrameth",
+        description="pyrameth detects base modifications from Nanopore "
         "r10.4 reads, which contains the following modules:\n"
         "\t%(prog)s call_mods: call modifications\n"
         "\t%(prog)s call_freq: call frequency of modifications "
@@ -130,14 +136,18 @@ def main():
         "-v",
         "--version",
         action="version",
-        version="deepsignal3 version: {}".format(DEEPSIGNAL3_VERSION),
-        help="show deepsignal3 version and exit.",
+        version="pyrameth version: {}".format(PYRAMETH_VERSION),
+        help="show pyrameth version and exit.",
     )
 
     subparsers = parser.add_subparsers(
-        title="modules", help="deepsignal3 modules, use -h/--help for help"
+        title="modules", help="pyrameth modules, use -h/--help for help"
     )
     sub_call_mods = subparsers.add_parser("call_mods", description="call modifications")
+    sub_call_mods_bam = subparsers.add_parser(
+        "call_mods_bam",
+        description="call modifications – read-level parallel pipeline, outputs ModBAM with MM/ML tags",
+    )
     sub_call_freq = subparsers.add_parser(
         "call_freq", description="call frequency of modifications at genome level"
     )
@@ -549,6 +559,79 @@ def main():
     )
 
     sub_call_mods.set_defaults(func=main_call_mods)
+
+    # sub_call_mods_bam =====================================================================================
+    scb_in = sub_call_mods_bam.add_argument_group("INPUT")
+    scb_in.add_argument("--input_path", "-i", type=str, required=True,
+                        help="signal directory (pod5/slow5/fast5)")
+    scb_in.add_argument("--bam", type=str, required=True,
+                        help="input aligned BAM file")
+    scb_in.add_argument("--recursively", "-r", type=str, default="yes")
+
+    scb_out = sub_call_mods_bam.add_argument_group("OUTPUT")
+    scb_out.add_argument("--output_bam", "-o", type=str, required=True,
+                         help="output ModBAM path (.bam)")
+    scb_out.add_argument("--sort_bam", type=str, default="yes",
+                         help="sort and index output BAM when done, yes or no, default yes")
+
+    scb_model = sub_call_mods_bam.add_argument_group("MODEL")
+    scb_model.add_argument("--model_path", "-m", type=str, required=True,
+                           help="trained model checkpoint (.ckpt)")
+    scb_model.add_argument("--model_class", type=str, default="mtm",
+                           choices=["mtm", "bilstm"])
+    scb_model.add_argument("--use_compile", type=str, default="no")
+    scb_model.add_argument("--use_cpu", action="store_true", default=False)
+    scb_model.add_argument("--nproc_cpu", type=int, default=1,
+                           help="CPU inference workers (CPU mode only)")
+
+    scb_hp = sub_call_mods_bam.add_argument_group("MODEL_HYPER")
+    scb_hp.add_argument("--seq_len",      type=int,   default=21)
+    scb_hp.add_argument("--signal_len",   type=int,   default=15)
+    scb_hp.add_argument("--class_num",    type=int,   default=2)
+    scb_hp.add_argument("--dropout_rate", type=float, default=0.0)
+    scb_hp.add_argument("--n_vocab",      type=int,   default=16)
+    scb_hp.add_argument("--n_embed",      type=int,   default=4)
+
+    scb_lstm = sub_call_mods_bam.add_argument_group("BILSTM_HYPER")
+    scb_lstm.add_argument("--hid_rnn",      type=int, default=256)
+    scb_lstm.add_argument("--layernum1",    type=int, default=3)
+    scb_lstm.add_argument("--layernum2",    type=int, default=1)
+    scb_lstm.add_argument("--is_base",      type=str, default="yes")
+    scb_lstm.add_argument("--is_signallen", type=str, default="yes")
+    scb_lstm.add_argument("--is_trace",     type=str, default="no")
+
+    scb_mtm = sub_call_mods_bam.add_argument_group("MTM_HYPER")
+    scb_mtm.add_argument("--mtm_num_base_features", type=int,      default=1)
+    scb_mtm.add_argument("--mtm_hid_rnn",           type=int,      default=128)
+    scb_mtm.add_argument("--mtm_d_static",          type=int,      default=1)
+    scb_mtm.add_argument("--mtm_ratios",   nargs="+", type=int,    default=[2, 2, 2, 2])
+    scb_mtm.add_argument("--mtm_r_hid",             type=int,      default=4)
+    scb_mtm.add_argument("--mtm_norm_first",         type=str,      default="True")
+    scb_mtm.add_argument("--mtm_down_mode",          type=str,      default="concat",
+                         choices=["concat", "avg", "max"])
+    scb_mtm.add_argument("--mtm_temporal_depth",    type=int,      default=2)
+
+    scb_ext = sub_call_mods_bam.add_argument_group("EXTRACTION")
+    scb_ext.add_argument("--motifs",           type=str,   default="CG")
+    scb_ext.add_argument("--mod_loc",          type=int,   default=0)
+    scb_ext.add_argument("--methy_label",      type=int,   default=1, choices=[0, 1])
+    scb_ext.add_argument("--normalize_method", type=str,   default="mad",
+                         choices=["mad", "zscore"])
+    scb_ext.add_argument("--mapq",             type=int,   default=1)
+    scb_ext.add_argument("--coverage_ratio",   type=float, default=0.5)
+    scb_ext.add_argument("--identity",         type=float, default=0.0)
+    scb_ext.add_argument("--positions",        type=str,   default=None)
+    scb_ext.add_argument("--rna",              action="store_true", default=False)
+    scb_ext.add_argument("--plant",            action="store_true", default=False,
+                         help="plant mode: proximity tag counts any C within ±10 bp")
+    scb_ext.add_argument("--chrom",            type=str, nargs="+", default=None)
+
+    scb_perf = sub_call_mods_bam.add_argument_group("PERFORMANCE")
+    scb_perf.add_argument("--batch_size", "-b", type=int, default=500)
+    scb_perf.add_argument("--nproc",      "-p", type=int, default=10,
+                          help="number of IO producer processes, default 10")
+
+    sub_call_mods_bam.set_defaults(func=main_call_mods_bam)
 
     # sub_call_freq =====================================================================================
     scf_input = sub_call_freq.add_argument_group("INPUT")

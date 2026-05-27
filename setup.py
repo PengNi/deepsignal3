@@ -10,13 +10,13 @@ here = os.path.abspath(os.path.dirname(__file__))
 
 
 # Get the version number from _version.py, and exe_path (learn from tombo)
-verstrline = open(os.path.join(here, 'deepsignal3', '_version.py'), 'r').readlines()[-1]
-vsre = r"^DEEPSIGNAL3_VERSION = ['\"]([^'\"]*)['\"]"
+verstrline = open(os.path.join(here, 'pyrameth', '_version.py'), 'r').readlines()[-1]
+vsre = r"^PYRAMETH_VERSION = ['\"]([^'\"]*)['\"]"
 mo = re.search(vsre, verstrline)
 if mo:
     __version__ = mo.group(1)
 else:
-    raise RuntimeError('Unable to find version string in "deepsignal3/_version.py".')
+    raise RuntimeError('Unable to find version string in "pyrameth/_version.py".')
 
 
 # def find_version(*file_paths):
@@ -51,12 +51,12 @@ with open('requirements.txt', 'r') as rf:
     required = rf.read().splitlines()
 
 setup(
-    name='deepsignal3',
-    packages=['deepsignal3', 'deepsignal3.utils'],
+    name='pyrameth',
+    packages=['pyrameth', 'pyrameth.utils'],
     keywords=['methylation', 'nanopore', 'neural network', 'deep learning', '5mC'],
     version=__version__,
-    url='https://github.com/PengNi/deepsignal3',
-    download_url='https://github.com/PengNi/deepsignal3/archive/{}.tar.gz'.format(__version__),
+    url='https://github.com/PengNi/pyrameth',
+    download_url='https://github.com/PengNi/pyrameth/archive/{}.tar.gz'.format(__version__),
     license='BSD 3-Clause Clear License',
     author='Peng Ni',
     install_requires=required,
@@ -68,7 +68,7 @@ setup(
     long_description_content_type='text/markdown',
     entry_points={
         'console_scripts': [
-            'deepsignal3=deepsignal3.deepsignal3:main',
+            'pyrameth=pyrameth.pyrameth:main',
             ],
         },
     platforms='any',

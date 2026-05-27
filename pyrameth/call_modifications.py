@@ -563,7 +563,7 @@ def inference_ultra(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        "deepsignal3 call_mods – unified inference (modelMTM / BiLSTM)",
+        "pyrameth call_mods – unified inference (modelMTM / BiLSTM)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 

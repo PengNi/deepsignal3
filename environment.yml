@@ -1,4 +1,4 @@
-name: deepsignal3
+name: pyrameth
 channels:
   - bioconda
   - pytorch
@@ -22,4 +22,4 @@ dependencies:
     - ont-fast5-api
     - pod5
     - pyslow5
-    # - deepsignal3  # uncomment to install from PyPI instead of source
+    # - pyrameth  # uncomment to install from PyPI instead of source

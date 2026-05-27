@@ -1,4 +1,4 @@
-deepsignal3
+PyraMeth
 ================
 
 
@@ -36,4 +36,4 @@ freeze version of the first released models
 -------
 0.1.0
 -----
-Release the first vesrion of deepsignal3 package
+Release the first vesrion of PyraMeth package

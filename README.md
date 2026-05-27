@@ -1,4 +1,4 @@
-# DeepSignal3
+# PyraMeth
 
 ## A deep learning tool for DNA methylation detection from modern Oxford Nanopore reads.
 
@@ -18,7 +18,7 @@ Supports two model architectures: **modelMTM** (default, Multi-scale Temporal Mi
 
 ## Installation
 
-deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https://pytorch.org/).
+PyraMeth is built on [Python3](https://www.python.org/) and [PyTorch](https://pytorch.org/).
 
 - Prerequisites:\
    [Python3.\*](https://www.python.org/) (version >=3.12) \
@@ -37,28 +37,28 @@ deepsignal3 is built on [Python3](https://www.python.org/) and [PyTorch](https:/
 
 #### 1. Create an environment
 
-We highly recommend to use a virtual environment for the installation of deepsignal3 and its dependencies. A virtual environment can be created and (de)activated as follows by using [conda](https://conda.io/docs/):
+We highly recommend to use a virtual environment for the installation of PyraMeth and its dependencies. A virtual environment can be created and (de)activated as follows by using [conda](https://conda.io/docs/):
 
 ```bash
 # create (recommended: use environment.yml for exact dependency resolution)
 conda env create -f environment.yml
 # or create manually
-conda create -n deepsignal3 python=3.12
+conda create -n pyrameth python=3.12
 # activate
-conda activate deepsignal3
+conda activate pyrameth
 # deactivate
 conda deactivate
 ```
 
 The virtual environment can also be created by using [virtualenv](https://github.com/pypa/virtualenv/).
 
-#### 2. Install deepsignal3
+#### 2. Install PyraMeth
 
-- After creating and activating the environment, download deepsignal3 (**latest version**) from github:
+- After creating and activating the environment, download PyraMeth (**latest version**) from github:
 
 ```bash
-git clone https://github.com/PengNi/deepsignal3.git
-cd deepsignal3
+git clone https://github.com/PengNi/PyraMeth.git
+cd PyraMeth
 pip install -e .
 ```
 
@@ -89,19 +89,19 @@ Example data, including training data and test data, can be downloaded from ([go
 
 To call modifications, the raw fast5 files should be basecalled ([Guppy](https://nanoporetech.com/community)(version <=6.2.1)), and the raw pod5 files should be basecalled ([Dorado](https://github.com/nanoporetech/dorado)). Belows are commands to call 5mC in CG (you can use --motifs to change, for example --motifs CHH):
 
-Demo commands of using Dorado and deepsignal3 to call 5mC from POD5/SloW5/BloW5 files:
+Demo commands of using Dorado and PyraMeth to call 5mC from POD5/SloW5/BloW5 files:
 
 ```bash
 # 1. dorado basecall using GPU
 dorado basecaller dna_r10.4.1_e8.2_400bps_hac@v4.1.0 --emit-moves --device cuda:all pod5/ --reference chm13v2.0.fa > demo.bam
-# 2. deepsignal3 call_mods (MTM model, default)
-deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
-deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
+# 2. pyrameth call_mods (MTM model, default)
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path *.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.call_mods.frequency.tsv
 # optional: neural-network refinement via AggrAttRNN (aggregate mode)
-deepsignal3 call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m aggre_model.ckpt
+pyrameth call_freq --input_path pod5.CG.call_mods.tsv --result_file pod5.CG.aggregate.bed -m aggre_model.ckpt
 ```
 
-Demo commands of using Guppy and deepsignal3 to call 5mC from FAST5 files:
+Demo commands of using Guppy and PyraMeth to call 5mC from FAST5 files:
 
 ```bash
 # Higher versions of Guppy no longer support the output format fast5
@@ -110,9 +110,9 @@ Demo commands of using Guppy and deepsignal3 to call 5mC from FAST5 files:
 guppy_basecaller -i multi_fast5s/ -r -s fast5s_guppy/ --config dna_r10.4.1_e8.2_400bps_hac_prom.cfg --device CUDA:0 --fast5_out
 # multi_fast5s/ is the folder where hg002.r10.4.test.fast5 is stored
 # fast5s_guppy/ is the output folder
-# 2. deepsignal3 call_mods
-deepsignal3 call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
-deepsignal3 call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
+# 2. pyrameth call_mods
+pyrameth call_mods --input_path fast5s_guppy/ --model_path *.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+pyrameth call_freq --input_path fast5s.CG.call_mods.tsv --result_file fast5s.CG.call_mods.frequency.tsv
 ```
 
 ## Usage
@@ -151,16 +151,16 @@ For the example data:
 # call 5mCpGs for instance
 
 # extracted-feature TSV file as input (MTM model, default)
-deepsignal3 call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+pyrameth call_mods --input_path pod5s.CG.features.tsv --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 
 # pod5/slow5/blow5 files as input, MTM model (default), use GPU
-deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.ckpt --model_class mtm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 
 # pod5/slow5/blow5 files as input, BiLSTM model
-deepsignal3 call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.bilstm.ckpt --model_class bilstm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
+pyrameth call_mods --input_path pod5/ --bam demo.bam --model_path human.r10.4.CG.bilstm.ckpt --model_class bilstm --result_file pod5.CG.call_mods.tsv --nproc 32 --nproc_gpu 4 --seq_len 21 --signal_len 15 -b 8192
 
 # fast5 files as input, use GPU
-deepsignal3 call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
+pyrameth call_mods --input_path fast5s_guppy --model_path human.r10.4.CG.ckpt --model_class mtm --result_file fast5s.CG.call_mods.tsv --motifs CG --nproc 32 --nproc_gpu 4 -b 8192
 ```
 
 The modification_call file is a tab-delimited text file in the following format:
@@ -184,11 +184,11 @@ The modification_call file is a tab-delimited text file in the following format:
 
 ```bash
 # output in TSV format
-deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
+pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.tsv
 # output in bedMethyl format
-deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed
+pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed
 # sort the results
-deepsignal3 call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed --sort
+pyrameth call_freq --input_path pod5s.CG.call_mods.tsv --result_file pod5s.CG.call_mods.frequency.bed --bed --sort
 ```
 
 The default TSV output format:
@@ -208,7 +208,7 @@ The default TSV output format:
 **Aggregate mode** (`--aggre_model`) — neural-network refinement via **AggrAttRNN**, always outputs bedMethyl:
 
 ```bash
-deepsignal3 call_freq \
+pyrameth call_freq \
   --input_path pod5s.CG.call_mods.tsv \
   --result_file pod5s.CG.aggregate.bed \
   --aggre_model aggre_model.ckpt \
@@ -226,12 +226,12 @@ Aggregate-mode parameters:
 
 Features of targeted sites can be extracted for training or testing.
 
-For the example data, deepsignal3 extracts 21-mer-seq and 21\*15-signal features of each CpG motif in reads by default.:
+For the example data, pyrameth extracts 21-mer-seq and 21\*15-signal features of each CpG motif in reads by default.:
 
 ```bash
-deepsignal3 extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
+pyrameth extract -i pod5/ --bam example.bam --reference_path chm13v2.0.fa -o pod5.CG.features.tsv --nproc 30 --motifs CG &
 
-deepsignal3 extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
+pyrameth extract -i fast5s_guppy --reference_path chm13v2.0.fa -o fast5s.CG.features.tsv --nproc 30 --motifs CG &
 ```
 
 The extracted_features file is a tab-delimited text file in the following format:
@@ -255,8 +255,8 @@ A new model can be trained as follows:
 
 ```bash
 # need to split training samples to two independent datasets for training and validating
-# please use deepsignal3 train -h/--help for more details
-deepsignal3 train --train_file /path/to/train/file --valid_file /path/to/valid/file --model_dir /dir/to/save/the/new/model
+# please use pyrameth train -h/--help for more details
+pyrameth train --train_file /path/to/train/file --valid_file /path/to/valid/file --model_dir /dir/to/save/the/new/model
 ```
 
 ## Result
@@ -279,7 +279,7 @@ The following table shows the read-level performance：
 
 #### For the VBZ compression issue
 
-Please try adding ont-vbz-hdf-plugin to your environment as follows when all fast5s failed in `tombo resquiggle` and/or `deepsignal3 call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
+Please try adding ont-vbz-hdf-plugin to your environment as follows when all fast5s failed in `tombo resquiggle` and/or `pyrameth call_mods`. Normally it will work after setting `HDF5_PLUGIN_PATH`:
 
 ```shell
 # download ont-vbz-hdf-plugin-1.0.1-Linux-x86_64.tar.gz (or newer version) and set HDF5_PLUGIN_PATH

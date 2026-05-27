@@ -585,7 +585,7 @@ def display_args(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        "deepsignal3 denoise: cross-rank label cleaning for training data.")
+        "pyrameth denoise: cross-rank label cleaning for training data.")
     parser.add_argument('--train_file', type=str, required=True,
                         help="combined pos+neg training TSV, balanced by kmer")
     parser.add_argument('--is_filter_fn', type=str, default="no",
